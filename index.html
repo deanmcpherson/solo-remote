@@ -587,7 +587,7 @@ async function lockPasskey() {
 
 /* ---------- settings screen ---------- */
 
-const APP_VERSION = 'v0714-1030'
+const APP_VERSION = 'v0714-1109'
 
 async function openSettings() {
   let info = { passkeys: 0, pushSubs: 0 }
@@ -950,6 +950,10 @@ async function openXterm(id, name, pid, tee) {
     if (seq) enqueue(id, { bytes: [...new TextEncoder().encode(seq)] })
   }
   const wheel = (up, pos, n = 1) => {
+    // only forward wheel events when the app enabled mouse reporting (claude
+    // does; a plain shell doesn't and would receive the escapes as typed
+    // characters) — otherwise scroll xterm's local scrollback
+    if (term.modes.mouseTrackingMode === 'none') { term.scrollLines(up ? -n : n); return }
     wq.pos = pos
     up ? wq.up += n : wq.down += n
     if (!wq.t) wq.t = setTimeout(flushWheel, 60)
