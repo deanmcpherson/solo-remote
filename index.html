@@ -1,0 +1,1405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Solo Remote</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-title" content="Solo">
+<link rel="stylesheet" href="/vendor/xterm.min.css">
+<script src="/vendor/xterm.min.js"></script>
+<style>
+  /* e-ink optimized: pure black/white, 16-shade grayscale, no motion, crisp borders */
+  :root {
+    --bg: #ffffff;
+    --fg: #000000;
+    --panel: #ffffff;
+    --line: #000000;
+    --line-soft: #999999;
+    --muted: #444444;
+    --faint: #777777;
+    --press: #dddddd;
+    --ok: #1a7a1a;
+    --err: #c02b1d;
+    --warn: #9a6a00;
+    --radius: 4px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #000000;
+      --fg: #ffffff;
+      --panel: #000000;
+      --line: #ffffff;
+      --line-soft: #666666;
+      --muted: #bbbbbb;
+      --faint: #888888;
+      --press: #333333;
+      --ok: #4fce4f;
+      --err: #ff6a55;
+      --warn: #e0a92e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #000000;
+    --fg: #ffffff;
+    --panel: #000000;
+    --line: #ffffff;
+    --line-soft: #666666;
+    --muted: #bbbbbb;
+    --faint: #888888;
+    --press: #333333;
+    --ok: #4fce4f;
+    --err: #ff6a55;
+    --warn: #e0a92e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  pre, input, textarea, .xterm, .xterm * { -webkit-user-select: text; user-select: text; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+    padding-top: env(safe-area-inset-top);
+  }
+
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 16px 16px 8px;
+  }
+  header { align-items: center; }
+  header .logo { width: 34px; height: 34px; border-radius: 8px; cursor: pointer; }
+  #conn { font-size: 11px; color: var(--muted); }
+  #conn.err { font-weight: 700; color: var(--err); }
+
+  .hbtn {
+    font: inherit; font-size: 15px; line-height: 1;
+    width: 34px; height: 34px; border-radius: var(--radius);
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  .hbtn:active { background: var(--fg); color: var(--bg); }
+  .hbtn svg, #settings .row svg, .termbar .keys svg { vertical-align: -3px; }
+  .hbtn svg { vertical-align: middle; }
+  .hbtn.done { opacity: .4; }
+
+  /* in-app alerts */
+  #alerts:empty { display: none; }
+  .alert {
+    display: flex; align-items: center; gap: 10px;
+    margin: 0 12px 8px; padding: 12px 14px;
+    background: var(--fg); color: var(--bg);
+    border-left: 6px solid var(--warn);
+    border-radius: var(--radius); cursor: pointer;
+    font-size: 13px; font-weight: 600;
+  }
+  .alert.dead { border-left-color: var(--err); }
+  .alert .body { flex: 1; min-width: 0; }
+  .alert .x { color: var(--bg); }
+
+  /* project switcher */
+  #projbar {
+    display: flex; gap: 8px; overflow-x: auto; padding: 6px 12px 12px;
+    scrollbar-width: none;
+  }
+  #projbar::-webkit-scrollbar { display: none; }
+  .chip {
+    flex: none; font: inherit; font-size: 13px;
+    padding: 9px 14px; border-radius: var(--radius);
+    border: 1px solid var(--line); background: var(--panel);
+    color: var(--fg); cursor: pointer;
+  }
+  .chip.on { color: var(--bg); background: var(--fg); font-weight: 700; }
+
+  /* tabs */
+  #tabs {
+    display: flex; border-top: 2px solid var(--line); border-bottom: 2px solid var(--line);
+    position: sticky; top: 0; background: var(--bg); z-index: 5;
+  }
+  #tabs button {
+    flex: 1; font: inherit; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    background: none; border: none;
+    color: var(--muted); padding: 12px 0 10px; cursor: pointer; min-width: 0;
+  }
+  #tabs button.on { color: var(--bg); background: var(--fg); font-weight: 700; }
+
+  main { padding: 12px 12px 60px; max-width: 720px; margin: 0 auto; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); margin-bottom: 10px; overflow: hidden;
+  }
+  .card-row { display: flex; align-items: center; gap: 12px; padding: 13px 14px; cursor: pointer; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; border: 2px solid var(--muted); background: none; }
+  .dot.running { background: var(--ok); border-color: var(--ok); }
+  .dot.stopped, .dot.exited { border-color: var(--err); }
+  .dot.failed { background: var(--err); border-color: var(--err); }
+  .dot.starting, .dot.stopping { background: var(--warn); border-color: var(--warn); }
+  .p-meta { flex: 1; min-width: 0; }
+  .p-name { font-weight: 700; }
+  .p-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .p-right { font-size: 11px; color: var(--muted); flex: none; }
+  .lastresp { font-size: 10px; color: var(--faint); margin-top: 2px; }
+
+  .btns { display: flex; gap: 8px; padding: 0 10px 10px; }
+  button.act {
+    font: inherit; font-size: 12px; letter-spacing: .06em; font-weight: 600;
+    color: var(--fg); background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 0; flex: 1; cursor: pointer; min-height: 40px;
+  }
+  button.act:active { background: var(--fg); color: var(--bg); }
+  button.act:disabled { opacity: .35; pointer-events: none; }
+  button.act.danger { color: var(--err); border-color: var(--err); }
+  button.act.danger:active { background: var(--err); color: #fff; }
+  button.act.small { flex: none; padding: 6px 12px; min-height: 32px; font-size: 11px; }
+
+  /* output pane */
+  .out { display: none; border-top: 1px solid var(--line); background: var(--bg); }
+  .out.open { display: block; }
+  .out pre {
+    padding: 12px 14px; font-size: 11px; line-height: 1.5;
+    color: var(--fg);
+    max-height: 45vh; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  }
+
+  /* full-viewport terminal */
+  body.noscroll { overflow: hidden; }
+  #term {
+    display: none; position: fixed; inset: 0; z-index: 20;
+    background: var(--bg);
+    padding-top: env(safe-area-inset-top);
+  }
+  #term.open { display: flex; flex-direction: column; }
+  .term-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border-bottom: 2px solid var(--line); flex: none;
+  }
+  .term-name { flex: 1; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #term pre {
+    flex: 1; min-height: 0; overflow-y: auto;
+    padding: 12px 14px; font-size: 12px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  #term .termbar { flex: none; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  #xterm-wrap { flex: 1; min-height: 0; overflow: hidden; padding: 6px; touch-action: none; }
+
+  /* terminal input bar */
+  .termbar { border-top: 1px dashed var(--line-soft); padding: 8px 10px 10px; }
+  .termbar .keys { display: flex; gap: 6px; margin-bottom: 8px; }
+  .termbar .keys button {
+    font: inherit; font-size: 11px; flex: 1; min-height: 34px;
+    color: var(--fg); background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer;
+  }
+  .termbar .keys button:active { background: var(--fg); color: var(--bg); }
+  .composerow { display: flex; gap: 6px; }
+  .composerow input {
+    flex: 1; font: inherit; font-size: 16px; min-width: 0;
+    color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px;
+  }
+  .composerow .send {
+    font: inherit; font-size: 12px; font-weight: 700; padding: 0 16px; min-height: 42px;
+    color: var(--bg); background: var(--fg); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer;
+  }
+  .termbar .keys button.mode.on { background: var(--fg); color: var(--bg); }
+
+  /* near-invisible key-capture row: must have REAL dimensions or Android
+     Chrome refuses to open the keyboard for it */
+  .termbar input.ghost {
+    display: block; width: 100%; height: 36px; margin-top: 6px;
+    opacity: 0.02; background: var(--bg); color: var(--bg); caret-color: transparent;
+    border: none; padding: 0; font-size: 16px; /* 16px stops iOS zoom-on-focus */
+  }
+  .termbar { position: relative; }
+  .termbar .keys button.on { background: var(--fg); color: var(--bg); }
+
+  /* forms */
+  .newbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  input[type=text], textarea, select {
+    font: inherit; font-size: 14px; color: var(--fg);
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 11px 12px; flex: 1; min-width: 120px;
+  }
+  input:focus, textarea:focus, select:focus { outline: 2px solid var(--fg); }
+  textarea { width: 100%; min-height: 40vh; line-height: 1.5; resize: vertical; }
+  select { appearance: none; flex: none; font-weight: 600; }
+
+  /* todos */
+  .todo-row { display: flex; align-items: center; gap: 12px; padding: 13px 14px; }
+  .tick {
+    width: 24px; height: 24px; flex: none; border-radius: var(--radius);
+    border: 2px solid var(--fg); background: var(--panel); cursor: pointer;
+    color: var(--bg); font-size: 14px; line-height: 1; font-weight: 700;
+  }
+  .tick.done { background: var(--ok); border-color: var(--ok); }
+  .todo-title { flex: 1; min-width: 0; }
+  .todo-title.done { color: var(--muted); text-decoration: line-through; }
+  .pri { font-size: 10px; letter-spacing: .1em; flex: none; text-transform: uppercase; color: var(--muted); }
+  .pri.high { color: var(--err); font-weight: 700; }
+  .pri.low { color: var(--faint); }
+  .x {
+    background: none; border: none; color: var(--muted); font: inherit; font-size: 16px;
+    padding: 4px 6px; cursor: pointer; flex: none;
+  }
+
+  .empty { text-align: center; color: var(--muted); padding: 48px 0 24px; font-size: 13px; }
+  .sect { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); padding: 14px 4px 8px; border-bottom: 1px solid var(--line-soft); margin-bottom: 10px; }
+
+  /* log highlighting (plain-text fallback view) */
+  .lg-err { color: var(--err); font-weight: 600; }
+  .lg-warn { color: var(--warn); }
+  .lg-ok { color: var(--ok); }
+  .lg-tag { color: var(--muted); font-weight: 600; }
+  .lg-dim { color: var(--faint); }
+
+  /* transcript overlay */
+  #hist {
+    display: none; position: absolute; inset: 0; z-index: 2;
+    background: var(--bg); overflow-y: auto; padding: 12px;
+  }
+  #hist.open { display: block; }
+  .msg { margin-bottom: 14px; }
+  .msg .who { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+  .msg.user .who { color: var(--fg); font-weight: 700; }
+  .msg .body { font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .msg.user .body { border-left: 3px solid var(--fg); padding-left: 10px; }
+  #hist .more { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 16px; }
+
+  /* settings screen */
+  #settings { display: none; position: fixed; inset: 0; z-index: 30; background: var(--bg); padding-top: env(safe-area-inset-top); overflow-y: auto; }
+  #settings.open { display: block; }
+  #settings .rows { padding: 12px; max-width: 480px; margin: 0 auto; }
+  #settings .row {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    font: inherit; font-size: 14px; font-weight: 600; text-align: left;
+    color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px; margin-bottom: 10px; cursor: pointer;
+  }
+  #settings .row:active { background: var(--fg); color: var(--bg); }
+  #settings .row { display: flex; align-items: center; gap: 14px; }
+  #settings .row svg { flex: none; }
+  #settings .row .rlabel { flex: 1; min-width: 0; text-align: left; }
+  #settings .row .sub { display: block; font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 2px; }
+  #settings .meta { text-align: center; color: var(--faint); font-size: 11px; padding: 18px 0; }
+
+  /* notifications panel */
+  #notifs { display: none; position: fixed; inset: 0; z-index: 30; background: var(--bg); padding-top: env(safe-area-inset-top); overflow-y: auto; }
+  #notifs.open { display: block; }
+  #notifs .rows { padding: 12px; max-width: 480px; margin: 0 auto; }
+  .nrow {
+    border: 1px solid var(--line); border-left: 6px solid var(--warn);
+    border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
+    opacity: .6;
+  }
+  .nrow.unread { opacity: 1; background: var(--panel); }
+  .nrow.unread .ntitle::before { content: "● "; font-size: 9px; vertical-align: 2px; }
+  .nrow.dead { border-left-color: var(--err); }
+  .ntitle { font-weight: 700; font-size: 13px; }
+  .nbody { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .badge {
+    position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px;
+    font-size: 10px; line-height: 16px; font-weight: 700; text-align: center;
+    background: var(--err); color: #fff; border-radius: 8px; padding: 0 3px;
+  }
+  .badge:empty { display: none; }
+
+  /* in-place lock overlay: re-auth without losing the current screen */
+  #lock { display: none; position: fixed; inset: 0; z-index: 60; background: var(--bg); align-items: center; justify-content: center; }
+  #lock.open { display: flex; }
+  #lock .box { text-align: center; padding: 24px; width: 100%; max-width: 300px; }
+  #lock h2 { font-size: 13px; font-weight: 700; letter-spacing: .14em; margin-bottom: 20px; }
+  #lock input { font: inherit; font-size: 26px; letter-spacing: .4em; text-align: center; color: var(--fg);
+    background: var(--bg); border: 2px solid var(--fg); border-radius: var(--radius); width: 100%; padding: 11px 0 11px .4em; }
+  #lock button { font: inherit; font-size: 13px; font-weight: 700; margin-top: 12px; width: 100%; padding: 12px 0;
+    color: var(--bg); background: var(--fg); border: 1px solid var(--fg); border-radius: var(--radius); cursor: pointer; }
+  #lock button.alt { color: var(--fg); background: var(--bg); }
+  #lock .err { margin-top: 10px; font-size: 12px; color: var(--err); min-height: 1em; }
+
+  /* long-press action sheet */
+  #sheet { display: none; position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.45); }
+  #sheet.open { display: flex; flex-direction: column; justify-content: flex-end; }
+  #sheet .panel {
+    background: var(--bg); border-top: 2px solid var(--line);
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+  }
+  #sheet .title { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 4px 4px 10px; }
+  #sheet button {
+    display: block; width: 100%; font: inherit; font-size: 14px; font-weight: 600; text-align: left;
+    color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 13px 14px; margin-bottom: 8px; cursor: pointer;
+  }
+  #sheet button:active { background: var(--fg); color: var(--bg); }
+  #sheet button.danger { color: var(--err); border-color: var(--err); }
+
+  /* editor */
+  #editor { display: none; }
+  #editor.open { display: block; }
+  #editor .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  #editor .bar .name { flex: 1; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <img class="logo" src="/icons/icon-192.png" alt="Solo" onclick="goHome()">
+  <span style="display:flex;align-items:center;gap:10px">
+    <span id="conn">connecting…</span>
+    <button class="hbtn" id="hbtn-bell" onclick="openNotifs()" title="notifications" style="position:relative"><span id="bellbadge" class="badge"></span></button>
+    <button class="hbtn" id="hbtn-gear" onclick="openSettings()" title="settings"></button>
+  </span>
+</header>
+<div id="settings"></div>
+<div id="notifs"></div>
+<div id="projbar"></div>
+<nav id="tabs"></nav>
+<main id="main"><div class="empty">loading…</div></main>
+<div id="term"></div>
+<div id="sheet" onclick="closeSheet()"></div>
+<div id="lock"></div>
+
+<script>
+const $ = id => document.getElementById(id)
+
+const ICONS = {
+  bell: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+  bellOff: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg>',
+  gear: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  key: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3-3.5 3.5"/></svg>',
+  power: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>',
+  keyboard: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="6" y1="9" x2="6" y2="9.01"/><line x1="10" y1="9" x2="10" y2="9.01"/><line x1="14" y1="9" x2="14" y2="9.01"/><line x1="18" y1="9" x2="18" y2="9.01"/><line x1="6" y1="13" x2="6" y2="13.01"/><line x1="18" y1="13" x2="18" y2="13.01"/><line x1="9" y1="13" x2="15" y2="13"/></svg>',
+  theme: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>',
+}
+
+const state = {
+  projects: [], projectId: null, tab: 'todos', view: 'home',
+  agentTools: [], term: null,   // process id shown in the full-screen terminal
+  editingPad: null,   // scratchpad id currently open in editor
+}
+const TABS = [
+  { key: 'todos', label: 'Todos' },
+  { key: 'agents', label: 'Agents' },
+  { key: 'terminals', label: 'Terms' },
+  { key: 'commands', label: 'Cmds' },
+  { key: 'pads', label: 'Pads' },
+]
+
+let lastUser = Date.now()
+for (const ev of ['touchstart', 'mousedown', 'keydown', 'scroll']) {
+  addEventListener(ev, () => { lastUser = Date.now() }, { passive: true, capture: true })
+}
+// lock after 5 minutes without user interaction (matches the server's session window)
+setInterval(() => { if (Date.now() - lastUser > 5 * 60 * 1000 && !$('lock').classList.contains('open')) { lastUser = Date.now(); fetch('/logout', { method: 'POST' }).finally(showLock) } }, 30000)
+
+async function api(path, opts = {}) {
+  if (opts.json) {
+    opts.method = opts.method || 'POST'
+    opts.headers = { 'content-type': 'application/json' }
+    opts.body = JSON.stringify(opts.json)
+  }
+  // mark user-triggered requests so the server refreshes the session window;
+  // background polling doesn't count as interaction
+  if (Date.now() - lastUser < 5000) opts.headers = { ...(opts.headers || {}), 'x-interactive': '1' }
+  const r = await fetch(path, opts)
+  if (r.status === 401) { showLock(); throw new Error('unauthorized') }
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok || j.ok === false) throw new Error(j.error?.message || j.error || ('HTTP ' + r.status))
+  return j.data
+}
+const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
+const fmtUp = s => s == null ? '' : s < 90 ? s + 's' : s < 5400 ? Math.round(s / 60) + 'm' : (s / 3600).toFixed(1) + 'h'
+const online = ok => { $('conn').textContent = ok ? 'online' : 'offline'; $('conn').classList.toggle('err', !ok) }
+
+/* ---------- theme ---------- */
+
+function applyTheme(t) {
+  if (t) document.documentElement.dataset.theme = t
+  else delete document.documentElement.dataset.theme
+}
+function currentTheme() {
+  return document.documentElement.dataset.theme ||
+    (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+}
+function toggleTheme() {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark'
+  localStorage.setItem('theme', next)
+  applyTheme(next)
+  if ($('settings').classList.contains('open')) openSettings()
+}
+applyTheme(localStorage.getItem('theme'))
+
+/* ---------- notifications: server log -> bell badge + panel ---------- */
+
+const notif = { items: [], unread: 0 }
+
+async function pollNotifs() {
+  try {
+    const d = await api('/notifications')
+    notif.items = d.items
+    notif.unread = d.unread
+    renderBell()
+  } catch {}
+}
+setInterval(pollNotifs, 5000)
+addEventListener('load', pollNotifs)
+addEventListener('DOMContentLoaded', () => {
+  $('hbtn-bell').insertAdjacentHTML('afterbegin', ICONS.bell)
+  $('hbtn-gear').innerHTML = ICONS.gear
+})
+
+function renderBell() {
+  const b = $('bellbadge')
+  if (b) b.textContent = notif.unread ? String(notif.unread) : ''
+  document.title = (notif.unread ? `(${notif.unread}) ` : '') + 'Solo Remote'
+  if ($('notifs').classList.contains('open')) renderNotifPanel()
+}
+
+function fmtAgo(ms) {
+  const s = Math.round((Date.now() - ms) / 1000)
+  return s < 60 ? s + 's ago' : s < 3600 ? Math.round(s / 60) + 'm ago' : Math.round(s / 3600) + 'h ago'
+}
+
+function openNotifs() {
+  $('notifs').classList.add('open')
+  renderNotifPanel()
+  api('/notifications/read', { method: 'POST' }).then(pollNotifs).catch(() => {})
+}
+function closeNotifs() { $('notifs').classList.remove('open'); $('notifs').innerHTML = '' }
+
+function renderNotifPanel() {
+  $('notifs').innerHTML = `
+    <div class="term-head">
+      <button class="act small" onclick="closeNotifs()">‹ back</button>
+      <span class="term-name">notifications</span>
+      <button class="act small danger" onclick="api('/notifications/clear',{method:'POST'}).then(()=>{pollNotifs();renderNotifPanel()})">clear all</button>
+    </div>
+    <div class="rows">
+      ${notif.items.length ? notif.items.map(n => `
+      <div class="nrow ${n.tag.startsWith('dead-') ? 'dead' : ''} ${n.read ? '' : 'unread'}"
+        onclick="${n.procId != null ? `jumpToProc(${n.procId})` : 'void 0'}">
+        <div class="ntitle">${esc(n.title)}</div>
+        <div class="nbody">${esc(n.body)} · ${fmtAgo(n.at)}</div>
+      </div>`).join('') : '<div class="empty">nothing yet</div>'}
+    </div>`
+}
+
+async function jumpToProc(procId) {
+  closeNotifs()
+  try {
+    const d = await api('/api/processes')
+    const a = d.processes.find(x => x.id === procId)
+    if (!a) return
+    state.projectId = a.projectId
+    openTerm(a.id, a.name, a.kind !== 'command', a.pid || 0)
+  } catch {}
+}
+
+/* ---------- top-level chrome ---------- */
+
+function renderProjbar() {
+  $('projbar').innerHTML =
+    `<button class="chip ${state.view === 'home' ? 'on' : ''}" onclick="goHome()">live</button>` +
+    state.projects.map(p =>
+      `<button class="chip ${state.view === 'project' && p.id === state.projectId ? 'on' : ''}" onclick="pickProject(${p.id})">${esc(p.displayName || p.name)}</button>`
+    ).join('') + `<button class="chip" onclick="newProject()">+ project</button>`
+  $('tabs').style.display = state.view === 'home' ? 'none' : 'flex'
+}
+function goHome() { state.view = 'home'; state.editingPad = null; renderProjbar(); refresh() }
+function renderTabs() {
+  $('tabs').innerHTML = TABS.map(t =>
+    `<button class="${t.key === state.tab ? 'on' : ''}" onclick="pickTab('${t.key}')">${t.label}</button>`
+  ).join('')
+}
+function pickProject(id) { state.view = 'project'; state.projectId = id; state.editingPad = null; renderProjbar(); refresh() }
+function pickTab(key) { state.tab = key; state.editingPad = null; renderTabs(); refresh() }
+
+async function newProject() {
+  const name = prompt('Project name?'); if (!name) return
+  const path = prompt('Absolute path to project directory?'); if (!path) return
+  try {
+    const d = await api('/api/projects', { json: { name, path } })
+    await loadProjects()
+    pickProject(d.project?.id ?? d.id)
+  } catch (e) { alert('failed: ' + e.message) }
+}
+
+async function loadProjects() {
+  const d = await api('/api/projects')
+  state.projects = d.projects
+  if (!state.projects.find(p => p.id === state.projectId)) state.projectId = state.projects[0]?.id ?? null
+  renderProjbar()
+}
+
+/* ---------- in-place lock ---------- */
+
+function showLock() {
+  if ($('lock').classList.contains('open')) return
+  $('lock').innerHTML = `<div class="box">
+    <h2>▮ LOCKED</h2>
+    <button id="lock-pk" style="display:none" onclick="lockPasskey()">unlock with passkey</button>
+    <input id="lock-pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="······"
+      onkeydown="if(event.key==='Enter')lockPin()">
+    <button class="alt" onclick="lockPin()">unlock with pin</button>
+    <div class="err" id="lock-err"></div>
+  </div>`
+  $('lock').classList.add('open')
+  fetch('/webauthn/login-options').then(r => r.json()).then(({ data }) => {
+    if (data.allowCredentials.length && window.PublicKeyCredential) {
+      $('lock-pk').style.display = 'block'
+      lockPasskey()
+    }
+  }).catch(() => {})
+}
+function hideLock() { $('lock').classList.remove('open'); $('lock').innerHTML = ''; lastUser = Date.now(); refresh(); pollNotifs() }
+
+async function lockPin() {
+  try {
+    const r = await fetch('/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pin: $('lock-pin').value }) })
+    const j = await r.json()
+    if (!j.ok) throw new Error(j.error || 'failed')
+    hideLock()
+  } catch (e) { const el = $('lock-err'); if (el) el.textContent = e.message }
+}
+
+async function lockPasskey() {
+  try {
+    const { data: o } = await (await fetch('/webauthn/login-options')).json()
+    const cred = await navigator.credentials.get({ publicKey: {
+      challenge: b64u.dec(o.challenge), rpId: o.rpId,
+      allowCredentials: o.allowCredentials.map(c => ({ ...c, id: b64u.dec(c.id) })),
+      userVerification: o.userVerification, timeout: o.timeout,
+    }})
+    const r = await fetch('/webauthn/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: cred.id, response: {
+        clientDataJSON: b64u.enc(cred.response.clientDataJSON),
+        authenticatorData: b64u.enc(cred.response.authenticatorData),
+        signature: b64u.enc(cred.response.signature),
+      }})})
+    if ((await r.json()).ok) hideLock()
+    else { const el = $('lock-err'); if (el) el.textContent = 'passkey rejected' }
+  } catch (e) { const el = $('lock-err'); if (el) el.textContent = 'passkey failed' }
+}
+
+/* ---------- settings screen ---------- */
+
+const APP_VERSION = 'v0714-1030'
+
+async function openSettings() {
+  let info = { passkeys: 0, pushSubs: 0 }
+  try { info = await api('/auth-info') } catch {}
+  $('settings').innerHTML = `
+    <div class="term-head">
+      <button class="act small" onclick="closeSettings()">‹ back</button>
+      <span class="term-name">settings</span>
+    </div>
+    <div class="rows">
+      <button class="row" onclick="toggleTheme()">${ICONS.theme}<span class="rlabel">theme
+        <span class="sub">switch light / dark (currently ${currentTheme()})</span></span></button>
+      <button class="row" onclick="registerPasskey().then(()=>openSettings())">${ICONS.key}<span class="rlabel">add passkey
+        <span class="sub">${info.passkeys} registered · needs the https (ts.net) address</span></span></button>
+      <button class="row" onclick="enablePush().then(()=>openSettings())">${ICONS.bell}<span class="rlabel">push on this device
+        <span class="sub">${info.pushSubs ? info.pushSubs + ' device(s) subscribed' : 'not enabled on this device'}</span></span></button>
+      <button class="row" onclick="api('/notify-config',{json:{enabled:${info.notifyEnabled ? 'false' : 'true'}}}).then(()=>openSettings())">${info.notifyEnabled ? ICONS.bellOff : ICONS.bell}<span class="rlabel">${info.notifyEnabled ? 'pause notifications' : 'resume notifications'}
+        <span class="sub">currently ${info.notifyEnabled ? 'on' : 'off'} — agent-waiting alerts only</span></span></button>
+      <button class="row" onclick="closeSettings();fetch('/logout',{method:'POST'}).finally(showLock)">${ICONS.power}<span class="rlabel">lock now
+        <span class="sub">re-auth required (auto after 5 min idle)</span></span></button>
+    </div>
+    <div class="meta">Solo Remote ${APP_VERSION}</div>`
+  $('settings').classList.add('open')
+}
+function closeSettings() { $('settings').classList.remove('open'); $('settings').innerHTML = '' }
+
+/* ---------- long-press action sheet ---------- */
+
+function showSheet(title, items) {
+  $('sheet').innerHTML = `<div class="panel" onclick="event.stopPropagation()">
+    <div class="title">${esc(title)}</div>
+    ${items.map((it, i) => `<button class="${it.danger ? 'danger' : ''}" onclick="closeSheet();(${it.fn})()">${esc(it.label)}</button>`).join('')}
+    <button onclick="closeSheet()">cancel</button>
+  </div>`
+  $('sheet').classList.add('open')
+}
+function closeSheet() { $('sheet').classList.remove('open'); $('sheet').innerHTML = '' }
+
+function procMenu(id, name, kind, status, projectId, pid) {
+  const items = []
+  if (kind === 'agent') items.push({ label: 'resume conversation (new session)', fn: `() => resumeAgent(${projectId}, ${pid || 0})` })
+  if (status === 'running') {
+    items.push({ label: 'restart', fn: `() => api('/api/processes/${id}/restart',{method:'POST'}).then(refresh)` })
+    items.push({ label: 'stop', fn: `() => api('/api/processes/${id}/stop',{method:'POST'}).then(refresh)`, danger: true })
+  } else {
+    items.push({ label: 'start', fn: `() => api('/api/processes/${id}/start',{method:'POST'}).then(refresh)` })
+  }
+  if (kind !== 'command') items.push({ label: 'close (remove from solo)', fn: `() => closeProc(${id}, '${esc(name)}')`, danger: true })
+  showSheet(name, items)
+}
+
+async function resumePicker() {
+  // claude --resume with no id: opens the interactive session picker
+  try {
+    const claudeTool = state.agentTools.find(t => t.tool_type === 'claude')
+    if (!claudeTool) throw new Error('no claude tool configured')
+    const d = await api(`/api/projects/${state.projectId}/processes/spawn`,
+      { json: { kind: 'agent', agentToolId: claudeTool.id, extraArgs: ['--resume'] } })
+    const p = d.process
+    setTimeout(() => openTerm(p.id, p.name, true, p.pid || 0), 1800)
+  } catch (e) { alert('resume failed: ' + e.message) }
+}
+
+async function resumeAgent(projectId, pid) {
+  try {
+    const claudeTool = state.agentTools.find(t => t.tool_type === 'claude')
+    if (!claudeTool) throw new Error('no claude tool configured')
+    let extraArgs = ['--continue']
+    if (pid) {
+      try {
+        const s = await api('/agent-session?pid=' + pid)
+        if (s.sessionId) extraArgs = ['--resume', s.sessionId]
+      } catch {}
+    }
+    const d = await api(`/api/projects/${projectId}/processes/spawn`, { json: { kind: 'agent', agentToolId: claudeTool.id, extraArgs } })
+    const p = d.process
+    state.projectId = projectId
+    setTimeout(() => openTerm(p.id, p.name, true, p.pid || 0), 1800)
+  } catch (e) { alert('resume failed: ' + e.message) }
+}
+
+/* ---------- home: all agents, most recently active first ---------- */
+
+async function renderHome() {
+  const d = await api('/api/processes')
+  const agents = d.processes.filter(x => x.kind === 'agent')
+  const running = agents.filter(x => x.status === 'running' && x.pid)
+  let states = {}
+  if (running.length) {
+    try { states = await api('/agent-status?ids=' + running.map(a => a.id).join(',')) } catch {}
+    try {
+      const titles = await api('/agent-titles?procs=' + running.map(x => `${x.id}:${x.pid}`).join(','))
+      for (const a of agents) if (titles[a.id]) a.displayTitle = titles[a.id]
+    } catch {}
+  }
+  const recency = a => {
+    const st = states[a.id]
+    if (!st) return 1e9
+    return st.sessionAgeSeconds ?? st.agent_state?.last_output_seconds ?? 1e9
+  }
+  agents.sort((a, b) => recency(a) - recency(b))
+  $('main').innerHTML = agents.length ? agents.map(a => {
+    const s = states[a.id]?.agent_state
+    const age = states[a.id]?.sessionAgeSeconds
+    // session-file age beats pty output: idle screens animate constantly,
+    // but the session file only changes on real messages/tool activity
+    const badge = a.status !== 'running' ? esc(a.status)
+      : !s ? 'running'
+      : age != null && age < 8 ? 'responding…'
+      : s.idle ? 'waiting ' + fmtUp(Math.round(s.idle_seconds))
+      : 'working · quiet ' + fmtUp(Math.round(age ?? s.last_output_seconds))
+    return `
+    <div class="card">
+      <div class="card-row" onclick="state.projectId=${a.projectId};openTerm(${a.id},'${esc(a.displayTitle || a.name)}',true,${a.pid || 0})"
+        oncontextmenu="event.preventDefault();procMenu(${a.id},'${esc(a.displayTitle || a.name)}','agent','${esc(a.status)}',${a.projectId},${a.pid || 0})">
+        <span class="dot ${esc(a.status)}"></span>
+        <span class="p-meta">
+          <div class="p-name">${esc(a.displayTitle || a.name)}</div>
+          <div class="p-sub">${esc(a.projectName)} · ${badge}</div>
+        </span>
+        <span class="p-right" style="text-align:right">${fmtUp(a.uptimeSeconds)}${age != null || (s && s.last_output_seconds != null) ? `<div class="lastresp">↳ ${fmtUp(Math.round(age ?? s.last_output_seconds))} ago</div>` : ''}</span>
+      </div>
+    </div>`
+  }).join('') : '<div class="empty">no agents — spawn one from a project\'s Agents tab</div>'
+}
+
+/* ---------- processes (agents / terminals / commands) ---------- */
+
+function procCard(x) {
+  const showClose = x.kind !== 'command'
+  const interactive = x.kind !== 'command'
+  // prefer a richer name if/when solo's API starts exposing one
+  const label = x.displayTitle || x.displayName || x.title || x.name
+  return `
+  <div class="card" data-pid="${x.id}">
+    <div class="card-row" onclick="openTerm(${x.id},'${esc(label)}',${interactive},${x.pid || 0})"
+      oncontextmenu="event.preventDefault();procMenu(${x.id},'${esc(label)}','${x.kind}','${esc(x.status)}',${x.projectId},${x.pid || 0})">
+      <span class="dot ${esc(x.status)}"></span>
+      <span class="p-meta">
+        <div class="p-name">${esc(label)} <span style="color:var(--muted);font-weight:400">· ${esc(x.status)}</span></div>
+        <div class="p-sub">${esc(x.command || x.kind)}</div>
+      </span>
+      <span class="p-right" style="text-align:right">${fmtUp(x.uptimeSeconds)}${x.lastResp != null ? `<div class="lastresp">↳ ${fmtUp(Math.round(x.lastResp))} ago</div>` : ''}</span>
+      ${showClose ? `<button class="x" onclick="event.stopPropagation();closeProc(${x.id},'${esc(x.name)}')">✕</button>` : ''}
+    </div>
+    <div class="btns">
+      ${x.status === 'running'
+        ? `<button class="act danger" onclick="act(this,'/api/processes/${x.id}/stop')">stop</button>
+           <button class="act" onclick="act(this,'/api/processes/${x.id}/restart')">restart</button>`
+        : `<button class="act" onclick="act(this,'/api/processes/${x.id}/start')">start</button>`}
+    </div>
+  </div>`
+}
+
+async function renderProcesses(kind) {
+  const d = await api('/api/processes?projectId=' + state.projectId)
+  const procs = d.processes.filter(x => x.kind === kind)
+  if (kind === 'agent') {
+    // overlay AI session titles (solo doesn't expose its sidebar titles; the
+    // proxy recovers them from claude session files for claude agents)
+    const running = procs.filter(x => x.pid)
+    if (running.length) {
+      try {
+        const titles = await api('/agent-titles?procs=' + running.map(x => `${x.id}:${x.pid}`).join(','))
+        for (const x of procs) if (titles[x.id]) x.displayTitle = titles[x.id]
+      } catch {}
+      try {
+        const st = await api('/agent-status?ids=' + running.map(x => x.id).join(','))
+        for (const x of procs) x.lastResp = st[x.id]?.sessionAgeSeconds ?? st[x.id]?.agent_state?.last_output_seconds
+      } catch {}
+    }
+  }
+  let spawnBar = ''
+  if (kind === 'agent') {
+    spawnBar = `<div class="newbar">
+      <select id="agent-tool">${state.agentTools.map(t => `<option value="${t.id}" ${t.tool_type === 'claude' ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+      <input type="text" id="agent-name" placeholder="name (optional)">
+      <button class="act small" style="min-height:42px;padding:0 16px" onclick="spawnAgent()">spawn</button>
+      <button class="act small" style="min-height:42px;padding:0 16px" onclick="resumePicker()">resume…</button>
+    </div>`
+  } else if (kind === 'terminal') {
+    spawnBar = `<div class="newbar">
+      <input type="text" id="term-name" placeholder="name (optional)">
+      <button class="act small" style="min-height:42px;padding:0 16px" onclick="spawnTerminal()">new terminal</button>
+    </div>`
+  } else if (kind === 'command') {
+    spawnBar = `<div class="newbar">
+      <button class="act" onclick="act(this,'/api/projects/${state.projectId}/start-all')">start all</button>
+      <button class="act danger" onclick="act(this,'/api/projects/${state.projectId}/stop-all')">stop all</button>
+      <button class="act" onclick="act(this,'/api/projects/${state.projectId}/restart-all')">restart all</button>
+    </div>`
+  }
+  $('main').innerHTML = spawnBar +
+    (procs.length ? procs.map(procCard).join('')
+      : `<div class="empty">no ${kind === 'command' ? 'commands (defined in solo.yml)' : kind + 's'}</div>`)
+}
+
+async function act(el, path) {
+  el.disabled = true
+  try { await api(path, { method: 'POST' }) } catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+async function closeProc(id, name) {
+  if (!confirm(`Close ${name}? This kills the session.`)) return
+  try { await api('/api/processes/' + id, { method: 'DELETE' }) } catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+async function spawnAgent() {
+  const agentToolId = Number($('agent-tool').value)
+  const name = $('agent-name').value.trim()
+  try { await api(`/api/projects/${state.projectId}/processes/spawn`, { json: { kind: 'agent', agentToolId, ...(name ? { name } : {}) } }) }
+  catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+async function spawnTerminal() {
+  const name = $('term-name').value.trim()
+  try {
+    const d = await api(`/api/projects/${state.projectId}/processes/spawn`, { json: { kind: 'terminal', ...(name ? { name } : {}) } })
+    // re-exec the shell under `script` so raw ANSI is teed for the color view
+    const pid = d.process?.id
+    if (pid) setTimeout(() => api('/input', { json: { processId: pid, input: ' exec script -qF /tmp/solo-tee-$$.log $SHELL', submit: true } }).catch(() => {}), 1500)
+  } catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+/* ---------- full-viewport terminal ---------- */
+
+function markSeen(procId) {
+  api('/notify-seen', { json: { procId } }).catch(() => {})
+  setTimeout(pollNotifs, 400)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistration().then(r => r?.getNotifications?.().then(ns => {
+      for (const n of ns) if (n.tag === 'idle-' + procId || n.tag === 'dead-' + procId) n.close()
+    })).catch(() => {})
+  }
+}
+
+function heartbeatViewing() {
+  if (state.term != null) api('/viewing', { json: { procId: state.term } }).catch(() => {})
+}
+setInterval(heartbeatViewing, 15000)
+
+async function openTerm(id, name, interactive, pid) {
+  state.term = id
+  markSeen(id)
+  heartbeatViewing()
+  // color path: agents spawned with the tee wrapper stream raw ANSI we can
+  // render with a real terminal emulator instead of the plain-text fallback
+  let tee = { available: false }
+  if (pid) { try { tee = await api('/tee?pid=' + pid) } catch {} }
+  if (tee.available && window.Terminal) return openXterm(id, name, pid, tee)
+  // no tee log yet — common right after spawn/restart. keep probing (also
+  // re-resolving the pid, which changes when a process restarts) and upgrade
+  // to the colored view as soon as it's available
+  clearInterval(state.teeProbe)
+  if (interactive && window.Terminal) {
+    let tries = 0
+    state.teeProbe = setInterval(async () => {
+      if (state.term !== id || ++tries > 20) { clearInterval(state.teeProbe); return }
+      try {
+        let livePid = pid
+        if (!livePid || tries % 3 === 0) {
+          const d = await api('/api/processes/' + id)
+          livePid = d.process?.pid || 0
+        }
+        if (!livePid) return
+        const t = await api('/tee?pid=' + livePid)
+        if (t.available && state.term === id) {
+          clearInterval(state.teeProbe)
+          openXterm(id, name, livePid, t)
+        }
+      } catch {}
+    }, 1000)
+  }
+  $('term').innerHTML = `
+    <div class="term-head">
+      <button class="act small" onclick="closeTerm()">‹ back</button>
+      <span class="term-name">${esc(name)}</span>
+      <button class="act small danger" onclick="api('/api/processes/${id}/stop',{method:'POST'}).catch(e=>alert(e.message))">stop</button>
+    </div>
+    <pre id="term-out">…</pre>
+    ${interactive ? termbarHTML(id) : ''}`
+  $('term').classList.add('open')
+  document.body.classList.add('noscroll')
+  if (interactive) wireTermbar(id)
+  pollOutput(id)
+  clearInterval(state.termTimer)
+  state.termTimer = setInterval(() => pollOutput(id), 350)
+}
+async function openXterm(id, name, pid, tee) {
+  clearInterval(state.teeProbe)
+  $('term').innerHTML = `
+    <div class="term-head">
+      <button class="act small" onclick="closeTerm()">‹ back</button>
+      <span class="term-name">${esc(name)}</span>
+      <button class="act small" id="histbtn" onclick="toggleHist(${pid || 0})">log</button>
+      <button class="act small danger" onclick="api('/api/processes/${id}/stop',{method:'POST'}).catch(e=>alert(e.message))">stop</button>
+    </div>
+    <div style="position:relative;flex:1;min-height:0;display:flex;flex-direction:column">
+      <div id="xterm-wrap"></div>
+      <div id="hist" onscroll="histScroll()"></div>
+    </div>
+    ${termbarHTML(id)}`
+  $('term').classList.add('open')
+  document.body.classList.add('noscroll')
+  const dark = currentTheme() === 'dark'
+  // size the pty to this screen: measure the wrap, derive cols/rows from cell metrics
+  const wrap = $('xterm-wrap')
+  const FONT = 12, CELL_W = FONT * 0.602, CELL_H = FONT * 1.4
+  let cols = Math.max(20, Math.floor((wrap.clientWidth - 12) / CELL_W))
+  let rows = Math.max(5, Math.floor((wrap.clientHeight - 12) / CELL_H))
+  // remember solo's desktop size so we can hand the pty back on close
+  state.termRestore = tee.outerRows ? { pid, cols: tee.outerCols, rows: tee.outerRows } : null
+  try {
+    const r = await api('/resize', { json: { pid, cols, rows } })
+    cols = r.cols; rows = r.rows
+  } catch { cols = tee.cols || 80; rows = tee.rows || 24 }
+  const term = new Terminal({
+    rows, cols,
+    fontSize: FONT, fontFamily: 'ui-monospace, Menlo, monospace',
+    theme: dark ? { background: '#000', foreground: '#fff' } : {
+      background: '#fff', foreground: '#000', cursor: '#000',
+      selectionBackground: '#00000030',
+      // ANSI palette readable on white
+      black: '#000', red: '#8b1a1a', green: '#1a5c1a', yellow: '#6b5900',
+      blue: '#1a3a8b', magenta: '#6b1a6b', cyan: '#0e5a5a', white: '#555',
+      brightBlack: '#666', brightRed: '#a22', brightGreen: '#282', brightYellow: '#870',
+      brightBlue: '#33a', brightMagenta: '#828', brightCyan: '#188', brightWhite: '#000',
+    },
+  })
+  term.open($('xterm-wrap'))
+  const ta = wrap.querySelector('.xterm-helper-textarea')
+  if (ta) { ta.readOnly = true; ta.tabIndex = -1; ta.addEventListener('focus', () => focusKeys()) }
+  term.onData(d => enqueue(id, { bytes: [...new TextEncoder().encode(d)] }))
+  state.xterm = term
+  // mobile keyboards are unreliable with xterm's internal textarea:
+  // route input through the shared termbar (compose or live mode)
+  wireTermbar(id)
+  // tapping the terminal surface also summons the keyboard
+  wrap.addEventListener('click', () => { if (!window.getSelection()?.toString()) focusKeys() })
+
+  // virtualized scrolling: forward touch drags / wheel as SGR mouse-wheel
+  // events — claude has mouse reporting enabled and scrolls its own content
+  const cellPos = e => {
+    const r = wrap.getBoundingClientRect()
+    const px = (e.touches ? e.touches[0].clientX : e.clientX) - r.left
+    const py = (e.touches ? e.touches[0].clientY : e.clientY) - r.top
+    return {
+      x: Math.min(term.cols, Math.max(1, Math.ceil(px / CELL_W))),
+      y: Math.min(term.rows, Math.max(1, Math.ceil(py / CELL_H))),
+    }
+  }
+  // wheel events are coalesced (one /input per ~60ms burst, not per tick) so
+  // fast scrolling doesn't queue dozens of round trips
+  const wq = { up: 0, down: 0, pos: { x: 1, y: 1 }, t: null }
+  const flushWheel = () => {
+    wq.t = null
+    const seq = `\x1b[<64;${wq.pos.x};${wq.pos.y}M`.repeat(Math.min(wq.up, 30)) +
+                `\x1b[<65;${wq.pos.x};${wq.pos.y}M`.repeat(Math.min(wq.down, 30))
+    wq.up = wq.down = 0
+    if (seq) enqueue(id, { bytes: [...new TextEncoder().encode(seq)] })
+  }
+  const wheel = (up, pos, n = 1) => {
+    wq.pos = pos
+    up ? wq.up += n : wq.down += n
+    if (!wq.t) wq.t = setTimeout(flushWheel, 60)
+  }
+  const step = CELL_H * 0.6   // finer-grained: ~2 ticks per cell of drag
+  const emitDrag = (e, pos) => {
+    while (acc > step) { wheel(true, pos); acc -= step }    // drag down = scroll up
+    while (acc < -step) { wheel(false, pos); acc += step }
+  }
+  let touchY = null, acc = 0, vel = 0, lastT = 0, flingTimer = null
+  wrap.addEventListener('touchstart', e => {
+    clearInterval(flingTimer); flingTimer = null
+    touchY = e.touches[0].clientY; acc = 0; vel = 0; lastT = e.timeStamp
+  }, { passive: true })
+  wrap.addEventListener('touchmove', e => {
+    if (touchY == null) return
+    e.preventDefault()
+    const y = e.touches[0].clientY
+    const dy = y - touchY
+    const dt = Math.max(1, e.timeStamp - lastT)
+    vel = 0.8 * vel + 0.2 * (dy / dt)   // smoothed px/ms
+    touchY = y; lastT = e.timeStamp
+    acc += dy
+    emitDrag(e, cellPos(e))
+  }, { passive: false })
+  wrap.addEventListener('touchend', e => {
+    touchY = null
+    // momentum: keep scrolling with decaying velocity after a fling
+    if (Math.abs(vel) > 0.25) {
+      const pos = { x: Math.ceil(term.cols / 2), y: Math.ceil(term.rows / 2) }
+      flingTimer = setInterval(() => {
+        acc += vel * 50
+        vel *= 0.93
+        emitDrag(null, pos)
+        if (Math.abs(vel) < 0.05) { clearInterval(flingTimer); flingTimer = null }
+      }, 50)
+    }
+  }, { passive: true })
+  wrap.addEventListener('wheel', e => {
+    e.preventDefault()
+    wheel(e.deltaY < 0, cellPos(e), Math.min(5, Math.max(1, Math.round(Math.abs(e.deltaY) / 30))))
+  }, { passive: false })
+  let off = 0, busy = false, tick = 0
+  const pull = async () => {
+    if (busy || state.term !== id) return
+    busy = true
+    try {
+      const r = await fetch(`/tee-data?pid=${pid}&off=${off}`)
+      if (r.ok) {
+        const next = Number(r.headers.get('x-next-off'))
+        const buf = new Uint8Array(await r.arrayBuffer())
+        if (buf.length) term.write(buf)
+        off = next
+      }
+      if (++tick % 16 === 0) {
+        // drift guard: solo-side resizes snap the inner pty back to desktop
+        // dimensions, which breaks rendering here — re-assert ours
+        const t = await api('/tee?pid=' + pid)
+        if (t.available && (t.cols !== term.cols || t.rows !== term.rows)) {
+          await api('/resize', { json: { pid, cols: term.cols, rows: term.rows } })
+        }
+      }
+    } catch {}
+    busy = false
+  }
+  pull()
+  clearInterval(state.termTimer)
+  state.termTimer = setInterval(pull, 300)
+  term.focus()
+}
+
+/* ---------- transcript (lazy-loaded conversation history) ---------- */
+
+const hist = { pid: null, before: null, loading: false }
+
+function renderMsg(m) {
+  return `<div class="msg ${m.role === 'user' ? 'user' : ''}">
+    <div class="who">${m.role === 'user' ? 'you' : 'claude'}</div>
+    <div class="body">${esc(m.text)}</div>
+  </div>`
+}
+
+async function toggleHist(pid) {
+  const el = $('hist')
+  if (el.classList.contains('open')) { el.classList.remove('open'); el.innerHTML = ''; return }
+  el.classList.add('open')
+  el.innerHTML = '<div class="more">loading…</div>'
+  hist.pid = pid; hist.before = null; hist.loading = false
+  try {
+    const d = await api('/agent-history?pid=' + pid)
+    hist.before = d.before
+    el.innerHTML = (d.before != null ? '<div class="more" id="hist-more">scroll up for older…</div>' : '') +
+      d.messages.map(renderMsg).join('')
+    el.scrollTop = el.scrollHeight
+  } catch (e) { el.innerHTML = '<div class="more">no transcript: ' + esc(e.message) + '</div>' }
+}
+
+async function histScroll() {
+  const el = $('hist')
+  if (hist.before == null || hist.loading || el.scrollTop > 120) return
+  hist.loading = true
+  try {
+    const d = await api(`/agent-history?pid=${hist.pid}&before=${hist.before}`)
+    hist.before = d.before
+    const prevHeight = el.scrollHeight
+    const more = $('hist-more')
+    if (more) more.remove()
+    el.insertAdjacentHTML('afterbegin',
+      (d.before != null ? '<div class="more" id="hist-more">scroll up for older…</div>' : '') +
+      d.messages.map(renderMsg).join(''))
+    el.scrollTop += el.scrollHeight - prevHeight   // keep viewport anchored
+  } catch {}
+  hist.loading = false
+}
+
+function closeTerm() {
+  state.term = null
+  clearInterval(state.teeProbe)
+  api('/viewing', { json: { procId: null } }).catch(() => {})
+  clearInterval(state.termTimer)
+  // hand the pty back to the desktop: restore solo's outer dimensions
+  if (state.termRestore) {
+    api('/resize', { json: state.termRestore }).catch(() => {})
+    state.termRestore = null
+  }
+  if (state.xterm) { state.xterm.dispose(); state.xterm = null }
+  $('term').classList.remove('open')
+  $('term').innerHTML = ''
+  document.body.classList.remove('noscroll')
+  refresh()
+}
+/* ---------- keyboard modes: compose (default) vs live passthrough ---------- */
+
+function kbMode() { return localStorage.getItem('kbmode') || 'compose' }
+
+function termbarHTML(id) {
+  const live = kbMode() === 'live'
+  return `
+    <div class="termbar" id="termbar">
+      <div class="keys" onpointerdown="event.preventDefault()" onmousedown="event.preventDefault()">
+        <button onclick="sendBytes(${id},[13])">⏎</button>
+        <button onclick="sendBytes(${id},[3])">^C</button>
+        <button onclick="sendBytes(${id},[27])">esc</button>
+        <button onclick="sendBytes(${id},[9])">tab</button>
+        <button onclick="sendBytes(${id},[27,91,90])">⇧tab</button>
+        <button onclick="sendBytes(${id},[27,91,65])">↑</button>
+        <button onclick="sendBytes(${id},[27,91,66])">↓</button>
+        <button class="mode ${live ? 'on' : ''}" onclick="toggleKbMode(${id})" title="live keystroke mode">live</button>
+      </div>
+      ${live
+        ? `<input type="text" id="term-in" class="ghost" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="terminal keyboard input">`
+        : `<div class="composerow">
+            <input type="text" id="term-compose" placeholder="message…" autocapitalize="sentences" autocomplete="on" spellcheck="true"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();sendCompose(${id})}">
+            <button class="send" onclick="sendCompose(${id})">send</button>
+          </div>`}
+    </div>`
+}
+
+function wireTermbar(id) {
+  if (kbMode() === 'live') { wireTermInput(id); focusKeys() }
+  else { const el = $('term-compose'); if (el) el.focus() }
+}
+
+function toggleKbMode(id) {
+  localStorage.setItem('kbmode', kbMode() === 'live' ? 'compose' : 'live')
+  const bar = $('termbar')
+  if (bar) {
+    bar.outerHTML = termbarHTML(id)
+    wireTermbar(id)
+  }
+}
+
+function sendCompose(id) {
+  const el = $('term-compose')
+  const text = el.value
+  if (!text) { sendBytes(id, [13]); return }   // empty send = plain Enter
+  el.value = ''
+  enqueue(id, { input: text, submit: true })
+  el.focus()
+}
+
+// keystrokes are sent through a promise chain so they reach the pty in order
+let sendQueue = Promise.resolve()
+function inputFailed(msg) {
+  const c = $('conn')
+  c.textContent = 'input failed: ' + msg
+  c.classList.add('err')
+  clearTimeout(inputFailed._t)
+  inputFailed._t = setTimeout(() => c.classList.remove('err'), 5000)
+}
+function enqueue(id, payload) {
+  sendQueue = sendQueue
+    .then(() => api('/input', { json: { processId: id, ...payload } }))
+    .catch(e => inputFailed(e.message))
+  sendQueue.then(() => { clearTimeout(enqueue._t); enqueue._t = setTimeout(() => pollOutput(id), 250) })
+}
+function sendText(id, text) { if (text) enqueue(id, { input: text, submit: false }) }
+function sendBytes(id, bytes) { enqueue(id, { bytes }) }
+
+function focusKeys() { const el = $('term-in') || $('term-compose'); if (el) el.focus(); else if (state.xterm) state.xterm.focus() }
+
+const KEYMAP = {
+  Enter: [13], Backspace: [127], Tab: [9], Escape: [27], Delete: [27, 91, 51, 126],
+  ArrowUp: [27, 91, 65], ArrowDown: [27, 91, 66], ArrowRight: [27, 91, 67], ArrowLeft: [27, 91, 68],
+  Home: [27, 91, 72], End: [27, 91, 70], PageUp: [27, 91, 53, 126], PageDown: [27, 91, 54, 126],
+}
+function wireTermInput(id) {
+  const el = $('term-in')
+  if (!el) return
+  el.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.key.length === 1) {
+      const c = e.key.toUpperCase().charCodeAt(0) - 64
+      if (c >= 1 && c <= 26) { e.preventDefault(); sendBytes(id, [c]); return }
+    }
+    const bytes = e.key === 'Tab' && e.shiftKey ? [27, 91, 90] : KEYMAP[e.key]
+    if (bytes) { e.preventDefault(); sendBytes(id, bytes) }
+  })
+  // 'input' covers mobile keyboards/IME where keydown gives no useful key
+  el.addEventListener('input', () => {
+    if (el.value) { sendText(id, el.value); el.value = '' }
+  })
+}
+// heuristic log highlighting for plain-text output (solo strips real ANSI)
+function highlightLog(text) {
+  let h = esc(text)
+  // whole-line signals first
+  h = h.split('\n').map(line => {
+    if (/\b(error|err!|exception|fatal|failed|failure|traceback|panic)\b/i.test(line)) return '<span class="lg-err">' + line + '</span>'
+    if (/\b(warn|warning|deprecated)\b/i.test(line)) return '<span class="lg-warn">' + line + '</span>'
+    return line
+  }).join('\n')
+  // inline tokens
+  h = h.replace(/\b(\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?)\b/g, '<span class="lg-dim">$1</span>')
+  h = h.replace(/\b(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)\b/g, '<span class="lg-dim">$1</span>')
+  h = h.replace(/\[([a-z][a-z0-9:_-]{1,24})\]/gi, '[<span class="lg-tag">$1</span>]')
+  h = h.replace(/\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/g, '<span class="lg-tag">$1</span>')
+  h = h.replace(/\b(2\d\d)\b(?= [A-Z])/g, '<span class="lg-ok">$1</span>')
+  h = h.replace(/\b([45]\d\d)\b(?= [A-Z])/g, '<span class="lg-err">$1</span>')
+  h = h.replace(/(https?:\/\/[^\s<]+)/g, '<span class="lg-dim">$1</span>')
+  return h
+}
+
+async function pollOutput(id) {
+  if (state.term !== id) return
+  if (pollOutput._busy) return   // don't stack requests if one is slow
+  pollOutput._busy = true
+  try {
+    const d = await api(`/api/processes/${id}/output?lines=200`)
+    const pre = $('term-out')
+    if (pre && state.term === id) {
+      // only rewrite when content changed, so e-ink isn't refreshed needlessly
+      const raw = d.text || '(no output)'
+      if (pre.dataset.raw !== raw) {
+        const stick = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40
+        pre.dataset.raw = raw
+        pre.innerHTML = highlightLog(raw)
+        if (stick) pre.scrollTop = pre.scrollHeight
+      }
+    }
+  } catch {}
+  pollOutput._busy = false
+}
+
+/* ---------- todos ---------- */
+
+async function renderTodos() {
+  const d = await api(`/api/projects/${state.projectId}/todos?limit=100`)
+  const todos = d.todos || []
+  const open = todos.filter(t => !t.completed), done = todos.filter(t => t.completed)
+  const row = t => `
+    <div class="card"><div class="todo-row">
+      <button class="tick ${t.completed ? 'done' : ''}" onclick="toggleTodo(${t.id},${!t.completed})">${t.completed ? '✓' : ''}</button>
+      <span class="todo-title ${t.completed ? 'done' : ''}">${esc(t.title)}</span>
+      <span class="pri ${esc(t.priority)}">${esc(t.priority)}</span>
+      <button class="x" onclick="delTodo(${t.id})">✕</button>
+    </div></div>`
+  $('main').innerHTML = `
+    <div class="newbar">
+      <input type="text" id="todo-title" placeholder="new todo…" onkeydown="if(event.key==='Enter')addTodo()">
+      <select id="todo-pri"><option value="medium">med</option><option value="high">high</option><option value="low">low</option></select>
+      <button class="act small" style="min-height:42px;padding:0 16px" onclick="addTodo()">add</button>
+    </div>
+    ${open.length ? open.map(row).join('') : '<div class="empty">nothing open</div>'}
+    ${done.length ? `<div class="sect">done · ${done.length}</div>` + done.map(row).join('') : ''}`
+}
+async function addTodo() {
+  const title = $('todo-title').value.trim(); if (!title) return
+  try { await api(`/api/projects/${state.projectId}/todos`, { json: { title, priority: $('todo-pri').value } }) }
+  catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+async function toggleTodo(id, completed) {
+  try { await api(`/api/projects/${state.projectId}/todos/${id}`, { method: 'PATCH', json: { completed } }) }
+  catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+async function delTodo(id) {
+  if (!confirm('Delete todo?')) return
+  try { await api(`/api/projects/${state.projectId}/todos/${id}`, { method: 'DELETE' }) }
+  catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+
+/* ---------- scratchpads ---------- */
+
+async function renderPads() {
+  if (state.editingPad != null) return renderPadEditor()
+  const d = await api(`/api/projects/${state.projectId}/scratchpads?limit=100`)
+  const pads = d.scratchpads || []
+  $('main').innerHTML = `
+    <div class="newbar">
+      <input type="text" id="pad-name" placeholder="new scratchpad…" onkeydown="if(event.key==='Enter')addPad()">
+      <button class="act small" style="min-height:42px;padding:0 16px" onclick="addPad()">create</button>
+    </div>
+    ${pads.length ? pads.map(p => `
+    <div class="card"><div class="card-row" onclick="openPad(${p.id})">
+      <span class="p-meta">
+        <div class="p-name">${esc(p.name || p.title)}</div>
+        <div class="p-sub">${(p.tags || []).map(esc).join(' · ') || '&nbsp;'}</div>
+      </span>
+      <span class="p-right">${esc((p.updatedAt || '').slice(0, 10))}</span>
+      <button class="x" onclick="event.stopPropagation();delPad(${p.id})">✕</button>
+    </div></div>`).join('') : '<div class="empty">no scratchpads</div>'}`
+}
+async function addPad() {
+  const name = $('pad-name').value.trim(); if (!name) return
+  try {
+    const d = await api(`/api/projects/${state.projectId}/scratchpads`, { json: { name, content: '' } })
+    state.editingPad = d.scratchpad?.id ?? d.id
+  } catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+async function openPad(id) { state.editingPad = id; refresh() }
+async function renderPadEditor() {
+  try {
+    const d = await api(`/api/projects/${state.projectId}/scratchpads/${state.editingPad}`)
+    const p = d.scratchpad || d
+    state.padRevision = p.revision
+    $('main').innerHTML = `<div id="editor" class="open">
+      <div class="bar">
+        <button class="act small" onclick="state.editingPad=null;refresh()">‹ back</button>
+        <span class="name">${esc(p.name || p.title)}</span>
+        <button class="act small" onclick="savePad()">save</button>
+      </div>
+      <textarea id="pad-content">${esc(p.content || '')}</textarea>
+    </div>`
+  } catch (e) { state.editingPad = null; alert('failed: ' + e.message); refresh() }
+}
+async function savePad() {
+  try {
+    await api(`/api/projects/${state.projectId}/scratchpads/${state.editingPad}`, { method: 'PUT', json: { content: $('pad-content').value, expectedRevision: state.padRevision } })
+    state.editingPad = null
+  } catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+async function delPad(id) {
+  if (!confirm('Delete scratchpad?')) return
+  try {
+    const d = await api(`/api/projects/${state.projectId}/scratchpads/${id}`)
+    const rev = (d.scratchpad || d).revision
+    await api(`/api/projects/${state.projectId}/scratchpads/${id}?expectedRevision=${rev}`, { method: 'DELETE' })
+  } catch (e) { alert('failed: ' + e.message) }
+  refresh()
+}
+
+/* ---------- main loop ---------- */
+
+async function refresh() {
+  try {
+    if (!state.projects.length) await loadProjects()
+    if (!state.agentTools.length) {
+      try { state.agentTools = (await api('/agent-tools')).tools } catch {}
+    }
+    renderTabs()
+    if (state.view === 'home') { await renderHome(); online(true); return }
+    if (state.projectId == null) { $('main').innerHTML = '<div class="empty">no projects — create one above</div>'; online(true); return }
+    if (state.tab === 'todos') await renderTodos()
+    else if (state.tab === 'agents') await renderProcesses('agent')
+    else if (state.tab === 'terminals') await renderProcesses('terminal')
+    else if (state.tab === 'commands') await renderProcesses('command')
+    else if (state.tab === 'pads') await renderPads()
+    online(true)
+  } catch (e) { online(false) }
+}
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
+
+const b64u = {
+  dec: x => Uint8Array.from(atob(x.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)),
+  enc: b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+}
+
+async function registerPasskey() {
+  if (!window.PublicKeyCredential) return alert('passkeys need the https URL (ts.net)')
+  try {
+    const { challenge, rp, user, pubKeyCredParams, authenticatorSelection, attestation, excludeCredentials, timeout } =
+      (await api('/webauthn/reg-options'))
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: b64u.dec(challenge), rp,
+      user: { ...user, id: b64u.dec(user.id) },
+      pubKeyCredParams, authenticatorSelection, attestation, timeout,
+      excludeCredentials: excludeCredentials.map(c => ({ ...c, id: b64u.dec(c.id) })),
+    }})
+    await api('/webauthn/register', { json: {
+      id: cred.id,
+      response: {
+        clientDataJSON: b64u.enc(cred.response.clientDataJSON),
+        attestationObject: b64u.enc(cred.response.attestationObject),
+      },
+    }})
+    alert('passkey added — next unlock can use it')
+  } catch (e) { alert('passkey setup failed: ' + e.message) }
+}
+
+async function enablePush() {
+  try {
+    if (!('PushManager' in window)) return alert('push needs the https URL (ts.net) and an installed app')
+    const perm = await Notification.requestPermission()
+    if (perm !== 'granted') return alert('notifications not allowed')
+    const reg = await navigator.serviceWorker.ready
+    const { vapidPublicKey } = await api('/auth-info')
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u.dec(vapidPublicKey) })
+    await api('/push/subscribe', { json: sub.toJSON() })
+    alert('notifications on: agent waiting for input + process failures')
+  } catch (e) { alert('push setup failed: ' + e.message) }
+}
+
+// notification click deep-link: #agent-<processId>
+if (location.hash.startsWith('#agent-')) {
+  const pid = Number(location.hash.slice(7))
+  history.replaceState(null, '', '/')
+  setTimeout(async () => {
+    try {
+      const d = await api('/api/processes')
+      const a = d.processes.find(x => x.id === pid)
+      if (a) { state.projectId = a.projectId; openTerm(a.id, a.name, true, a.pid || 0) }
+    } catch {}
+  }, 800)
+}
+
+refresh()
+setInterval(() => {
+  // full-screen terminal open: its own fast timer handles output polling
+  if (state.term != null) return
+  // don't clobber typing: skip auto-refresh while an input/textarea has focus or editor is open
+  const a = document.activeElement
+  if (state.editingPad != null || (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT'))) return
+  refresh()
+}, 2500)
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+# secrets: PIN, session secret, VAPID keys, passkey credentials, push subscriptions
+auth.json
+
+node_modules/
+*.log
+.DS_Store
+.playwright-mcp/

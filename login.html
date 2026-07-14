@@ -1,0 +1,74 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Solo Remote — unlock</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Solo">
+<style>
+:root { --bg:#fff; --fg:#000; --err:#c02b1d; }
+@media (prefers-color-scheme: dark) { :root { --bg:#000; --fg:#fff; --err:#ff6a55; } }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--fg); font:15px/1.45 ui-monospace,"SF Mono",Menlo,monospace;
+  min-height:100vh; display:flex; align-items:center; justify-content:center; }
+main { text-align:center; padding:24px; width:100%; max-width:320px; }
+h1 { font-size:14px; font-weight:700; letter-spacing:.16em; margin-bottom:24px; }
+input { font:inherit; font-size:28px; letter-spacing:.4em; text-align:center; color:var(--fg);
+  background:var(--bg); border:2px solid var(--fg); border-radius:4px; width:100%; padding:12px 0 12px .4em; }
+input:focus { outline:2px solid var(--fg); }
+button { font:inherit; font-size:14px; font-weight:700; margin-top:14px; width:100%; padding:13px 0;
+  color:var(--bg); background:var(--fg); border:1px solid var(--fg); border-radius:4px; cursor:pointer; }
+button.alt { color:var(--fg); background:var(--bg); }
+p.err { margin-top:12px; font-size:12px; min-height:1em; color:var(--err); }
+</style>
+<script>if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{})</script>
+</head><body>
+<main>
+  <h1>▮ SOLO REMOTE</h1>
+  <button id="pk" style="display:none" onclick="passkey()">unlock with passkey</button>
+  <form method="POST" action="/login">
+    <input name="pin" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="······" autofocus required>
+    <button class="alt">unlock with pin</button>
+  </form>
+  <p class="err">__ERR__</p>
+</main>
+<script>
+const b64u = {
+  dec: s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)),
+  enc: b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+}
+async function passkey() {
+  try {
+    const r = await fetch('/webauthn/login-options')
+    const { data: o } = await r.json()
+    const cred = await navigator.credentials.get({ publicKey: {
+      challenge: b64u.dec(o.challenge),
+      rpId: o.rpId,
+      allowCredentials: o.allowCredentials.map(c => ({ ...c, id: b64u.dec(c.id) })),
+      userVerification: o.userVerification,
+      timeout: o.timeout,
+    }})
+    const res = await fetch('/webauthn/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: cred.id,
+        response: {
+          clientDataJSON: b64u.enc(cred.response.clientDataJSON),
+          authenticatorData: b64u.enc(cred.response.authenticatorData),
+          signature: b64u.enc(cred.response.signature),
+        },
+      })})
+    if ((await res.json()).ok) location.href = '/'
+    else document.querySelector('.err').textContent = 'passkey rejected'
+  } catch (e) { document.querySelector('.err').textContent = 'passkey failed: ' + e.message }
+}
+// show the passkey button when the browser supports it and one is registered
+if (window.PublicKeyCredential) {
+  fetch('/webauthn/login-options').then(r => r.json()).then(({ data }) => {
+    if (data.allowCredentials.length) {
+      document.getElementById('pk').style.display = 'block'
+      passkey()  // try immediately; falls back to the visible buttons if dismissed
+    }
+  }).catch(() => {})
+}
+</script>
+</body></html>
