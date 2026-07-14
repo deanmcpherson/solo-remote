@@ -100,6 +100,7 @@ enable push notifications.
 | `PORT` | `8123` | Listen port |
 | `SOLO_DISCOVERY` | `~/.config/soloterm/http-api.json` | Solo API discovery file |
 | `SOLO_MCP_BIN` | `/Applications/Solo.app/Contents/MacOS/mcp` | Solo MCP helper binary |
+| `PUSH_CONTACT` | `mailto:solo-remote@example.com` | VAPID contact sent to push services (set to your email) |
 
 ## How it works (and why it's fragile)
 

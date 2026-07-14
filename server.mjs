@@ -44,7 +44,9 @@ if (auth.notifyEnabled == null) auth.notifyEnabled = true
 auth.pushSubs = auth.pushSubs || []
 function saveAuth() { writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2), { mode: 0o600 }) }
 saveAuth()
-webpush.setVapidDetails('mailto:dean@paperform.co', auth.vapid.publicKey, auth.vapid.privateKey)
+// contact for push services (they may use it to reach the operator about problems)
+const PUSH_CONTACT = process.env.PUSH_CONTACT || 'mailto:solo-remote@example.com'
+webpush.setVapidDetails(PUSH_CONTACT, auth.vapid.publicKey, auth.vapid.privateKey)
 
 const IDLE_MS = 5 * 60 * 1000
 const sessions = new Map()   // token -> lastInteractive ms
