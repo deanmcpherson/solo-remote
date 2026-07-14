@@ -6,7 +6,7 @@
 
 import http from 'node:http'
 import { spawn, execFile } from 'node:child_process'
-import { readdirSync, statSync, writeFileSync, existsSync, openSync, readSync, closeSync } from 'node:fs'
+import { readdirSync, statSync, writeFileSync, existsSync, openSync, readSync, closeSync, watch as fsWatch } from 'node:fs'
 import { promisify } from 'node:util'
 import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -844,6 +844,64 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404)
   res.end('not found')
+})
+
+// --- websocket stream for the active terminal (no library: server->client
+// binary frames only; input still goes over HTTP POST /input) ---
+function wsAccept(key) {
+  return crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
+}
+function wsFrame(data) {
+  const len = data.length
+  let header
+  if (len < 126) header = Buffer.from([0x82, len])
+  else if (len < 65536) { header = Buffer.alloc(4); header[0] = 0x82; header[1] = 126; header.writeUInt16BE(len, 2) }
+  else { header = Buffer.alloc(10); header[0] = 0x82; header[1] = 127; header.writeBigUInt64BE(BigInt(len), 2) }
+  return Buffer.concat([header, data])
+}
+
+server.on('upgrade', (req, socket) => {
+  const url = new URL(req.url, 'http://x')
+  if (url.pathname !== '/ws-term' || !sessionFrom(req)) { socket.destroy(); return }
+  const pid = Number(url.searchParams.get('pid'))
+  const log = `/tmp/solo-tee-${pid}.log`
+  let off = Number(url.searchParams.get('off') || 0)
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n' +
+    'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
+    `Sec-WebSocket-Accept: ${wsAccept(req.headers['sec-websocket-key'])}\r\n\r\n`)
+
+  let closed = false
+  const pump = () => {
+    if (closed) return
+    try {
+      const size = statSync(log).size
+      while (off < size && !closed) {
+        const len = Math.min(size - off, 256 * 1024)
+        const buf = Buffer.alloc(len)
+        const fd = openSync(log, 'r')
+        readSync(fd, buf, 0, len, off)
+        closeSync(fd)
+        off += len
+        socket.write(wsFrame(buf))
+      }
+    } catch {}
+  }
+  pump()
+  // fs.watch fires on append (fsevents); a slow interval catches anything missed
+  let watcher = null
+  try { watcher = fsWatch(log, pump) } catch {}
+  const iv = setInterval(pump, 500)
+  const cleanup = () => {
+    if (closed) return
+    closed = true
+    clearInterval(iv)
+    try { watcher?.close() } catch {}
+    try { socket.destroy() } catch {}
+  }
+  socket.on('close', cleanup)
+  socket.on('error', cleanup)
+  socket.on('data', d => { if (d.length && (d[0] & 0x0f) === 8) cleanup() })   // client close frame
 })
 
 server.listen(PORT, '0.0.0.0', () => {

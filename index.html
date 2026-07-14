@@ -587,7 +587,7 @@ async function lockPasskey() {
 
 /* ---------- settings screen ---------- */
 
-const APP_VERSION = 'v0714-1109'
+const APP_VERSION = 'v0714-1700'
 
 async function openSettings() {
   let info = { passkeys: 0, pushSubs: 0 }
@@ -878,6 +878,8 @@ async function openTerm(id, name, interactive, pid) {
 }
 async function openXterm(id, name, pid, tee) {
   clearInterval(state.teeProbe)
+  clearInterval(state.driftTimer)
+  if (state.termWs) { try { state.termWs.close() } catch {}; state.termWs = null }
   $('term').innerHTML = `
     <div class="term-head">
       <button class="act small" onclick="closeTerm()">‹ back</button>
@@ -996,7 +998,8 @@ async function openXterm(id, name, pid, tee) {
     e.preventDefault()
     wheel(e.deltaY < 0, cellPos(e), Math.min(5, Math.max(1, Math.round(Math.abs(e.deltaY) / 30))))
   }, { passive: false })
-  let off = 0, busy = false, tick = 0
+  // primary: websocket stream of the tee log; fallback: http polling
+  let off = 0, busy = false
   const pull = async () => {
     if (busy || state.term !== id) return
     busy = true
@@ -1008,20 +1011,40 @@ async function openXterm(id, name, pid, tee) {
         if (buf.length) term.write(buf)
         off = next
       }
-      if (++tick % 16 === 0) {
-        // drift guard: solo-side resizes snap the inner pty back to desktop
-        // dimensions, which breaks rendering here — re-assert ours
-        const t = await api('/tee?pid=' + pid)
-        if (t.available && (t.cols !== term.cols || t.rows !== term.rows)) {
-          await api('/resize', { json: { pid, cols: term.cols, rows: term.rows } })
-        }
-      }
     } catch {}
     busy = false
   }
-  pull()
+  const startPolling = () => {
+    if (state.term !== id || state.termTimer) return
+    pull()
+    state.termTimer = setInterval(pull, 300)
+  }
   clearInterval(state.termTimer)
-  state.termTimer = setInterval(pull, 300)
+  state.termTimer = null
+  try {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    const ws = new WebSocket(`${proto}://${location.host}/ws-term?pid=${pid}&off=0`)
+    ws.binaryType = 'arraybuffer'
+    ws.onmessage = e => {
+      const buf = new Uint8Array(e.data)
+      off += buf.length     // keep the fallback cursor in sync
+      term.write(buf)
+    }
+    ws.onerror = () => { try { ws.close() } catch {} }
+    ws.onclose = () => { if (state.term === id) startPolling() }
+    state.termWs = ws
+  } catch { startPolling() }
+  // drift guard: solo-side resizes snap the inner pty back to desktop
+  // dimensions, which breaks rendering here — re-assert ours
+  state.driftTimer = setInterval(async () => {
+    if (state.term !== id) return
+    try {
+      const t = await api('/tee?pid=' + pid)
+      if (t.available && (t.cols !== term.cols || t.rows !== term.rows)) {
+        await api('/resize', { json: { pid, cols: term.cols, rows: term.rows } })
+      }
+    } catch {}
+  }, 5000)
   term.focus()
 }
 
@@ -1072,6 +1095,8 @@ async function histScroll() {
 function closeTerm() {
   state.term = null
   clearInterval(state.teeProbe)
+  clearInterval(state.driftTimer)
+  if (state.termWs) { try { state.termWs.close() } catch {}; state.termWs = null }
   api('/viewing', { json: { procId: null } }).catch(() => {})
   clearInterval(state.termTimer)
   // hand the pty back to the desktop: restore solo's outer dimensions
