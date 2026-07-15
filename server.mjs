@@ -681,6 +681,13 @@ const server = http.createServer(async (req, res) => {
         pids = kids
       }
       if (!tty) throw new Error('no tty')
+      // if the pty is already at the target size, setting it again emits no
+      // SIGWINCH and the app never repaints — jiggle one column to force it
+      const cur = (await run('stty', ['-f', '/dev/' + tty, 'size'])).stdout.trim().split(/\s+/).map(Number)
+      if (cur[0] === rows && cur[1] === cols) {
+        await run('stty', ['-f', '/dev/' + tty, 'rows', String(rows), 'columns', String(cols + 1)])
+        await new Promise(r => setTimeout(r, 50))
+      }
       await run('stty', ['-f', '/dev/' + tty, 'rows', String(rows), 'columns', String(cols)])
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: true, data: { tty, rows, cols } }))
