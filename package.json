@@ -9,10 +9,15 @@
   "author": "Dean McPherson",
   "type": "module",
   "dependencies": {
+    "highlight.js": "^11.11.1",
+    "marked": "^12.0.2",
     "web-push": "^3.6.7"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/deanmcpherson/solo-remote"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }

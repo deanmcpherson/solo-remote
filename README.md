@@ -21,6 +21,8 @@ where Solo lives, open it on your phone, and drive your agents from the couch.
 - **Projects** — todos, scratchpads, commands (start/stop/restart), terminals, agent
   spawning (defaults to Claude) and session resume (specific session or picker)
 - **Transcript view** — lazy-loaded conversation history read from Claude's session files
+- **File chips** — files the agent mentions appear as chips above the keyboard and open
+  in a read-only viewer (rendered markdown via marked, syntax highlighting via highlight.js)
 - **Notifications** — Web Push when an agent finishes and is waiting for input
   (debounced, deduped, suppressed while you're looking at it), with an in-app inbox
 - **Auth** — 6-digit PIN + WebAuthn passkeys, sessions expire after 5 minutes without
@@ -63,13 +65,15 @@ change any time; back up `~/.config/soloterm/solo.db` first):
 ```sh
 sqlite3 ~/.config/soloterm/solo.db <<'SQL'
 UPDATE agent_tool_installations
-SET command='wrap() { L=/tmp/solo-tee-$$.log; if [ $# -eq 0 ]; then exec script -qF $L claude --session-id $(uuidgen | tr A-Z a-z); else exec script -qF $L claude "$@"; fi }; wrap'
+SET command='wrap() { mkdir -p $HOME/.solo-remote-tee; L=$HOME/.solo-remote-tee/$$.log; if [ $# -eq 0 ]; then exec script -qF $L claude --session-id $(uuidgen | tr A-Z a-z); else exec script -qF $L claude "$@"; fi }; wrap'
 WHERE agent_tool_id = (SELECT id FROM agent_tools WHERE tool_type='claude');
 SQL
 ```
 
 New Claude sessions (spawned from Solo or the remote) then record raw ANSI and get the
-full colored terminal. The `--session-id` part also gives each session a known UUID so
+full colored terminal. Logs live in `~/.solo-remote-tee/` (not `/tmp`, which macOS
+purges — a deleted log permanently kills color for that live session); the server
+prunes logs of dead processes on startup. The `--session-id` part also gives each session a known UUID so
 titles/transcripts/resume are exact when several agents share a project. Existing
 sessions keep the plain-text view until restarted.
 

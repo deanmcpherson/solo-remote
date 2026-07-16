@@ -6,7 +6,7 @@
 
 import http from 'node:http'
 import { spawn, execFile } from 'node:child_process'
-import { readdirSync, statSync, writeFileSync, existsSync, openSync, readSync, closeSync, watch as fsWatch } from 'node:fs'
+import { readdirSync, statSync, writeFileSync, existsSync, openSync, readSync, closeSync, unlinkSync, realpathSync, watch as fsWatch } from 'node:fs'
 import { promisify } from 'node:util'
 import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -290,6 +290,24 @@ async function mcpCall(tool, args, retried) {
   }
 }
 
+// --- tee log location ---
+// stable dir survives macOS /tmp purging (which permanently kills color for
+// live sessions: script's deleted-but-open fd can't be re-attached)
+const TEE_DIR = path.join(process.env.HOME, '.solo-remote-tee')
+function teePath(pid) {
+  const a = path.join(TEE_DIR, pid + '.log')
+  if (existsSync(a)) return a
+  const b = `/tmp/solo-tee-${pid}.log`
+  return existsSync(b) ? b : a
+}
+// housekeeping on boot: drop logs whose process is gone
+try {
+  for (const f of readdirSync(TEE_DIR)) {
+    const pid = Number(f.replace('.log', ''))
+    if (pid) { try { process.kill(pid, 0) } catch { try { unlinkSync(path.join(TEE_DIR, f)) } catch {} } }
+  }
+} catch {}
+
 // --- agent titles ---
 // Solo shows AI-generated session titles in its sidebar but doesn't expose them
 // over any API (they're in-memory OSC terminal titles). For Claude agents we can
@@ -301,7 +319,7 @@ const titleCache = new Map()   // pid -> { title, sessionId, at }
 async function claudeInfo(pid) {
   const hit = titleCache.get(pid)
   if (hit && Date.now() - hit.at < 20000) return hit
-  let title = null, sessionId = null, file = null
+  let title = null, sessionId = null, file = null, infoCwd = null
   try {
     // find the claude process: the pty pid itself, or a direct child
     let cmd = (await run('ps', ['-o', 'command=', '-p', String(pid)])).stdout.trim()
@@ -318,6 +336,7 @@ async function claudeInfo(pid) {
     const cwdOut = (await run('lsof', ['-a', '-p', String(cpid), '-d', 'cwd', '-Fn'])).stdout
     const cwd = (cwdOut.split('\n').find(l => l.startsWith('n')) || '').slice(1)
     if (!cwd) throw new Error('no cwd')
+    infoCwd = cwd
     const dir = `${process.env.HOME}/.claude/projects/${cwd.replace(/[\/.]/g, '-')}`
 
     const m = cmd.match(/--resume[= ]+([0-9a-f-]{36})/) || cmd.match(/--session-id[= ]+([0-9a-f-]{36})/i)
@@ -339,7 +358,7 @@ async function claudeInfo(pid) {
       if (last) title = JSON.parse(last).aiTitle || null
     }
   } catch {}
-  const info = { title, sessionId, file, at: Date.now() }
+  const info = { title, sessionId, file, cwd: infoCwd, at: Date.now() }
   titleCache.set(pid, info)
   return info
 }
@@ -622,7 +641,7 @@ const server = http.createServer(async (req, res) => {
   // for xterm.js to replay/follow.
   if (url.pathname === '/tee') {
     const pid = Number(url.searchParams.get('pid'))
-    const log = `/tmp/solo-tee-${pid}.log`
+    const log = teePath(pid)
     let info = { available: false }
     try {
       const size = statSync(log).size
@@ -701,7 +720,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/tee-data') {
     const pid = Number(url.searchParams.get('pid'))
     const off = Number(url.searchParams.get('off') || 0)
-    const log = `/tmp/solo-tee-${pid}.log`
+    const log = teePath(pid)
     try {
       const size = statSync(log).size
       const len = Math.min(Math.max(0, size - off), 512 * 1024)
@@ -741,6 +760,65 @@ const server = http.createServer(async (req, res) => {
     const info = pid ? await claudeInfo(pid) : {}
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: true, data: { sessionId: info.sessionId || null } }))
+    return
+  }
+
+  if (url.pathname === '/agent-files') {
+    // recently referenced file paths from the conversation, for quick-open chips
+    try {
+      const pid = Number(url.searchParams.get('pid'))
+      const info = await claudeInfo(pid)
+      if (!info.file || !info.cwd) throw new Error('no session')
+      const text = readFileSync(info.file, 'utf8')
+      const lines = text.split('\n').slice(-400)
+      const re = /(?:^|[\s"'`(\[])((?:\.{0,2}\/)?[\w.-]+(?:\/[\w.-]+)*\.(?:md|txt|ts|tsx|js|jsx|mjs|cjs|json|jsonc|py|rb|go|rs|java|kt|css|scss|html|xml|yml|yaml|toml|sh|zsh|sql|php|c|h|cpp|hpp|swift|vue|svelte|prisma|graphql|env|conf|ini|csv))(?=$|[\s"'`).\],:;])/g
+      const seen = new Map()   // rel path -> recency index
+      let idx = 0
+      for (const line of lines) {
+        idx++
+        let m
+        while ((m = re.exec(line))) {
+          let rel = m[1].replace(/^\.\//, '')
+          if (rel.startsWith('/')) {
+            if (!rel.startsWith(info.cwd + '/')) continue
+            rel = rel.slice(info.cwd.length + 1)
+          }
+          if (rel.includes('..') || rel.length > 200) continue
+          try {
+            const st = statSync(path.join(info.cwd, rel))
+            if (st.isFile() && st.size < 2 * 1024 * 1024) seen.set(rel, idx)
+          } catch {}
+        }
+      }
+      const files = [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([rel]) => rel)
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, data: { files, cwd: info.cwd } }))
+    } catch (e) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, data: { files: [] } }))
+    }
+    return
+  }
+
+  if (url.pathname === '/file') {
+    // read-only file fetch, strictly contained within the agent's cwd
+    try {
+      const pid = Number(url.searchParams.get('pid'))
+      const rel = url.searchParams.get('path') || ''
+      const info = await claudeInfo(pid)
+      if (!info.cwd) throw new Error('no cwd')
+      const root = realpathSync(info.cwd)
+      const full = realpathSync(path.join(root, rel))
+      if (full !== root && !full.startsWith(root + '/')) throw new Error('outside project')
+      const st = statSync(full)
+      if (!st.isFile()) throw new Error('not a file')
+      if (st.size > 512 * 1024) throw new Error('file too large to preview')
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, data: { path: rel, content: readFileSync(full, 'utf8'), mtime: st.mtimeMs } }))
+    } catch (e) {
+      res.writeHead(404, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: String(e.message || e) }))
+    }
     return
   }
 
@@ -871,7 +949,7 @@ server.on('upgrade', (req, socket) => {
   const url = new URL(req.url, 'http://x')
   if (url.pathname !== '/ws-term' || !sessionFrom(req)) { socket.destroy(); return }
   const pid = Number(url.searchParams.get('pid'))
-  const log = `/tmp/solo-tee-${pid}.log`
+  const log = teePath(pid)
   let off = Number(url.searchParams.get('off') || 0)
   socket.write(
     'HTTP/1.1 101 Switching Protocols\r\n' +

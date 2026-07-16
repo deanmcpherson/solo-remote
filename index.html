@@ -14,6 +14,8 @@
 <meta name="apple-mobile-web-app-title" content="Solo">
 <link rel="stylesheet" href="/vendor/xterm.min.css">
 <script src="/vendor/xterm.min.js"></script>
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/highlight.min.js"></script>
 <style>
   /* e-ink optimized: pure black/white, 16-shade grayscale, no motion, crisp borders */
   :root {
@@ -322,6 +324,51 @@
   #lock button.alt { color: var(--fg); background: var(--bg); }
   #lock .err { margin-top: 10px; font-size: 12px; color: var(--err); min-height: 1em; }
 
+  /* referenced-file chips */
+  #filechips { display: flex; gap: 6px; overflow-x: auto; padding: 6px 10px 0; scrollbar-width: none; flex: none; }
+  #filechips::-webkit-scrollbar { display: none; }
+  #filechips:empty { display: none; }
+  .fchip {
+    flex: none; display: inline-flex; align-items: center; gap: 5px;
+    font: inherit; font-size: 11px; font-weight: 600;
+    color: var(--fg); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 6px 12px; cursor: pointer; max-width: 46vw;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fchip:active { background: var(--fg); color: var(--bg); }
+
+  /* read-only file viewer */
+  #fileview { display: none; position: fixed; inset: 0; z-index: 35; background: var(--bg); padding-top: env(safe-area-inset-top); flex-direction: column; }
+  #fileview.open { display: flex; }
+  #fileview .fbody { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
+  .codeview { font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  .mdview { font-family: -apple-system, system-ui, sans-serif; font-size: 15px; line-height: 1.6; max-width: 680px; margin: 0 auto; }
+  .mdview h1, .mdview h2, .mdview h3, .mdview h4 { margin: 1.2em 0 .5em; line-height: 1.25; }
+  .mdview h1 { font-size: 1.5em; border-bottom: 2px solid var(--line); padding-bottom: .3em; }
+  .mdview h2 { font-size: 1.25em; border-bottom: 1px solid var(--line-soft); padding-bottom: .2em; }
+  .mdview p, .mdview ul, .mdview ol { margin: .6em 0; }
+  .mdview ul, .mdview ol { padding-left: 1.4em; }
+  .mdview code { font-family: ui-monospace, Menlo, monospace; font-size: .88em; background: var(--press); padding: 1px 5px; border-radius: 3px; }
+  .mdview pre { background: var(--press); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 10px 12px; overflow-x: auto; margin: .8em 0; }
+  .mdview pre code { background: none; padding: 0; }
+  .mdview blockquote { border-left: 4px solid var(--line); margin: .8em 0; padding: .2em 0 .2em 1em; color: var(--muted); }
+  .mdview table { border-collapse: collapse; margin: .8em 0; }
+  .mdview th, .mdview td { border: 1px solid var(--line-soft); padding: 5px 10px; font-size: .9em; }
+  .mdview img { max-width: 100%; }
+  .mdview a { color: var(--fg); }
+
+  /* syntax highlighting tokens (theme-aware, monochrome-plus-accents) */
+  .hljs-keyword, .hljs-built_in, .hljs-type { font-weight: 700; }
+  .hljs-string, .hljs-regexp { color: var(--ok); }
+  .hljs-number, .hljs-literal { color: var(--warn); }
+  .hljs-comment, .hljs-quote { color: var(--faint); font-style: italic; }
+  .hljs-title, .hljs-name, .hljs-selector-tag { font-weight: 700; }
+  .hljs-attr, .hljs-attribute, .hljs-variable, .hljs-property { color: var(--muted); }
+  .hljs-meta, .hljs-doctag { color: var(--warn); }
+  .hljs-deletion { color: var(--err); }
+  .hljs-addition { color: var(--ok); }
+
   /* long-press action sheet */
   #sheet { display: none; position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.45); }
   #sheet.open { display: flex; flex-direction: column; justify-content: flex-end; }
@@ -362,6 +409,7 @@
 <div id="term"></div>
 <div id="sheet" onclick="closeSheet()"></div>
 <div id="lock"></div>
+<div id="fileview"></div>
 
 <script>
 const $ = id => document.getElementById(id)
@@ -374,6 +422,7 @@ const ICONS = {
   power: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>',
   keyboard: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="6" y1="9" x2="6" y2="9.01"/><line x1="10" y1="9" x2="10" y2="9.01"/><line x1="14" y1="9" x2="14" y2="9.01"/><line x1="18" y1="9" x2="18" y2="9.01"/><line x1="6" y1="13" x2="6" y2="13.01"/><line x1="18" y1="13" x2="18" y2="13.01"/><line x1="9" y1="13" x2="15" y2="13"/></svg>',
   theme: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>',
+  doc: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
 }
 
 const state = {
@@ -587,7 +636,7 @@ async function lockPasskey() {
 
 /* ---------- settings screen ---------- */
 
-const APP_VERSION = 'v0715-2115'
+const APP_VERSION = 'v0716-1756'
 
 async function openSettings() {
   let info = { passkeys: 0, pushSubs: 0 }
@@ -868,10 +917,12 @@ async function openTerm(id, name, interactive, pid) {
       <button class="act small danger" onclick="api('/api/processes/${id}/stop',{method:'POST'}).catch(e=>alert(e.message))">stop</button>
     </div>
     <pre id="term-out">…</pre>
+    <div id="filechips"></div>
     ${interactive ? termbarHTML(id) : ''}`
   $('term').classList.add('open')
   document.body.classList.add('noscroll')
   if (interactive) wireTermbar(id)
+  if (pid) { loadFileChips(pid); state.chipsTimer = setInterval(() => loadFileChips(pid), 12000) }
   pollOutput(id)
   clearInterval(state.termTimer)
   state.termTimer = setInterval(() => pollOutput(id), 350)
@@ -891,6 +942,7 @@ async function openXterm(id, name, pid, tee) {
       <div id="xterm-wrap"></div>
       <div id="hist" onscroll="histScroll()"></div>
     </div>
+    <div id="filechips"></div>
     ${termbarHTML(id)}`
   $('term').classList.add('open')
   document.body.classList.add('noscroll')
@@ -927,6 +979,9 @@ async function openXterm(id, name, pid, tee) {
   // mobile keyboards are unreliable with xterm's internal textarea:
   // route input through the shared termbar (compose or live mode)
   wireTermbar(id)
+  clearInterval(state.chipsTimer)
+  loadFileChips(pid)
+  state.chipsTimer = setInterval(() => loadFileChips(pid), 12000)
   // tapping the terminal surface also summons the keyboard
   wrap.addEventListener('click', () => { if (!window.getSelection()?.toString()) focusKeys() })
 
@@ -1051,6 +1106,54 @@ async function openXterm(id, name, pid, tee) {
   term.focus()
 }
 
+/* ---------- referenced-file chips + read-only viewer ---------- */
+
+async function loadFileChips(pid) {
+  try {
+    const d = await api('/agent-files?pid=' + pid)
+    const el = $('filechips')
+    if (!el) return
+    if (!d.files.length) { el.innerHTML = ''; return }
+    el.innerHTML = d.files.map(f => {
+      const base = f.split('/').pop()
+      return `<button class="fchip" title="${esc(f)}" onclick="openFile(${pid},'${esc(f)}')">${ICONS.doc}${esc(base)}</button>`
+    }).join('')
+  } catch {}
+}
+
+async function openFile(pid, rel) {
+  const fv = $('fileview')
+  fv.innerHTML = `
+    <div class="term-head">
+      <button class="act small" onclick="closeFile()">‹ back</button>
+      <span class="term-name">${esc(rel)}</span>
+    </div>
+    <div class="fbody"><div class="empty">loading…</div></div>`
+  fv.classList.add('open')
+  try {
+    const d = await api('/file?pid=' + pid + '&path=' + encodeURIComponent(rel))
+    const body = fv.querySelector('.fbody')
+    const ext = (rel.split('.').pop() || '').toLowerCase()
+    if (ext === 'md') {
+      body.innerHTML = `<div class="mdview">${marked.parse(d.content)}</div>`
+    } else {
+      body.innerHTML = `<pre class="codeview"><code></code></pre>`
+      const code = body.querySelector('code')
+      code.textContent = d.content
+      if (window.hljs) {
+        const lang = hljs.getLanguage(ext) ? ext : null
+        try {
+          const r = lang ? hljs.highlight(d.content, { language: lang }) : hljs.highlightAuto(d.content)
+          code.innerHTML = r.value
+        } catch {}
+      }
+    }
+  } catch (e) {
+    fv.querySelector('.fbody').innerHTML = `<div class="empty">couldn't open: ${esc(e.message)}</div>`
+  }
+}
+function closeFile() { const fv = $('fileview'); fv.classList.remove('open'); fv.innerHTML = '' }
+
 /* ---------- transcript (lazy-loaded conversation history) ---------- */
 
 const hist = { pid: null, before: null, loading: false }
@@ -1098,6 +1201,8 @@ async function histScroll() {
 function closeTerm() {
   state.term = null
   clearInterval(state.teeProbe)
+  clearInterval(state.chipsTimer)
+  closeFile()
   clearInterval(state.driftTimer)
   if (state.termWs) { try { state.termWs.close() } catch {}; state.termWs = null }
   api('/viewing', { json: { procId: null } }).catch(() => {})
