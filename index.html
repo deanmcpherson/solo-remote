@@ -337,6 +337,7 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .fchip:active { background: var(--fg); color: var(--bg); }
+  .fchip.link { text-decoration: none; border-style: dashed; }
 
   /* read-only file viewer */
   #fileview { display: none; position: fixed; inset: 0; z-index: 35; background: var(--bg); padding-top: env(safe-area-inset-top); flex-direction: column; }
@@ -423,6 +424,7 @@ const ICONS = {
   keyboard: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="6" y1="9" x2="6" y2="9.01"/><line x1="10" y1="9" x2="10" y2="9.01"/><line x1="14" y1="9" x2="14" y2="9.01"/><line x1="18" y1="9" x2="18" y2="9.01"/><line x1="6" y1="13" x2="6" y2="13.01"/><line x1="18" y1="13" x2="18" y2="13.01"/><line x1="9" y1="13" x2="15" y2="13"/></svg>',
   theme: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>',
   doc: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  link: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
 }
 
 const state = {
@@ -636,7 +638,7 @@ async function lockPasskey() {
 
 /* ---------- settings screen ---------- */
 
-const APP_VERSION = 'v0716-1756'
+const APP_VERSION = 'v0717-1952'
 
 async function openSettings() {
   let info = { passkeys: 0, pushSubs: 0 }
@@ -1113,11 +1115,18 @@ async function loadFileChips(pid) {
     const d = await api('/agent-files?pid=' + pid)
     const el = $('filechips')
     if (!el) return
-    if (!d.files.length) { el.innerHTML = ''; return }
-    el.innerHTML = d.files.map(f => {
-      const base = f.split('/').pop()
-      return `<button class="fchip" title="${esc(f)}" onclick="openFile(${pid},'${esc(f)}')">${ICONS.doc}${esc(base)}</button>`
-    }).join('')
+    const links = d.links || []
+    if (!d.files.length && !links.length) { el.innerHTML = ''; return }
+    el.innerHTML =
+      links.map(u => {
+        let label = u
+        try { const p = new URL(u); label = p.hostname.replace(/^www\./, '') + (p.pathname !== '/' ? '/…' : '') } catch {}
+        return `<a class="fchip link" href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}">${ICONS.link}${esc(label)}</a>`
+      }).join('') +
+      d.files.map(f => {
+        const base = f.split('/').pop()
+        return `<button class="fchip" title="${esc(f)}" onclick="openFile(${pid},'${esc(f)}')">${ICONS.doc}${esc(base)}</button>`
+      }).join('')
   } catch {}
 }
 

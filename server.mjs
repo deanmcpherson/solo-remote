@@ -791,11 +791,28 @@ const server = http.createServer(async (req, res) => {
         }
       }
       const files = [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([rel]) => rel)
+      // recent links too (e.g. artifact URLs claude shares) — newest first
+      const linkSeen = new Map()
+      const linkRe = /https?:\/\/[^\s"'`<>\\)\]}]+/g
+      let lidx = 0
+      for (const line of lines) {
+        lidx++
+        let m
+        while ((m = linkRe.exec(line))) {
+          let u = m[0].replace(/[.,;:!?*_\u0060]+$/, '')
+          if (u.length > 300) continue
+          let host
+          try { host = new URL(u).hostname } catch { continue }
+          if (host === 'localhost' || host.startsWith('127.') || host === '0.0.0.0') continue
+          linkSeen.set(u, lidx)
+        }
+      }
+      const links = [...linkSeen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([u]) => u)
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, data: { files, cwd: info.cwd } }))
+      res.end(JSON.stringify({ ok: true, data: { files, links, cwd: info.cwd } }))
     } catch (e) {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, data: { files: [] } }))
+      res.end(JSON.stringify({ ok: true, data: { files: [], links: [] } }))
     }
     return
   }
