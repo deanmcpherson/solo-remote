@@ -308,6 +308,56 @@ try {
   }
 } catch {}
 
+// --- pty sizing helpers ---
+async function innerTty(pid) {
+  let pids = [pid], tty = null
+  for (let d = 0; d < 4 && pids.length; d++) {
+    const kids = (await Promise.all(pids.map(p => run('pgrep', ['-P', String(p)]).catch(() => ({ stdout: '' })))))
+      .flatMap(r => r.stdout.split('\n').filter(Boolean))
+    for (const k of kids) {
+      const t = (await run('ps', ['-o', 'tty=', '-p', k])).stdout.trim()
+      if (t && t !== '??') tty = t
+    }
+    pids = kids
+  }
+  if (!tty) throw new Error('no tty')
+  return tty
+}
+async function resizeInner(pid, cols, rows) {
+  const tty = await innerTty(pid)
+  // a same-size set emits no SIGWINCH and the app never repaints — jiggle
+  const cur = (await run('stty', ['-f', '/dev/' + tty, 'size'])).stdout.trim().split(/\s+/).map(Number)
+  if (cur[0] === rows && cur[1] === cols) {
+    await run('stty', ['-f', '/dev/' + tty, 'rows', String(rows), 'columns', String(cols + 1)])
+    await new Promise(r => setTimeout(r, 50))
+  }
+  await run('stty', ['-f', '/dev/' + tty, 'rows', String(rows), 'columns', String(cols)])
+  return { tty }
+}
+async function outerSize(pid) {
+  const otty = (await run('ps', ['-o', 'tty=', '-p', String(pid)])).stdout.trim()
+  if (!otty || otty === '??') throw new Error('no outer tty')
+  const sz = (await run('stty', ['-f', '/dev/' + otty, 'size'])).stdout.trim().split(/\s+/).map(Number)
+  if (!sz[0] || !sz[1]) throw new Error('no size')
+  return { rows: sz[0], cols: sz[1] }
+}
+
+// auto-restore: if the phone vanished without closing the terminal (app
+// killed, tab discarded), hand resized ptys back to desktop dimensions
+// once the viewing heartbeat has gone stale
+const resizedPids = new Map()   // pid -> last resize ms
+setInterval(async () => {
+  if (!resizedPids.size) return
+  if (Date.now() - viewing.at < 60000) return   // phone still active
+  for (const [pid] of [...resizedPids]) {
+    resizedPids.delete(pid)
+    try {
+      const o = await outerSize(pid)
+      await resizeInner(pid, o.cols, o.rows)
+    } catch {}
+  }
+}, 30000)
+
 // --- agent titles ---
 // Solo shows AI-generated session titles in its sidebar but doesn't expose them
 // over any API (they're in-memory OSC terminal titles). For Claude agents we can
@@ -680,36 +730,17 @@ const server = http.createServer(async (req, res) => {
     // resize the wrapped session's inner pty so the TUI reflows to the
     // viewer's dimensions (solo's outer pty is untouched)
     try {
-      const body = JSON.parse(await new Promise((ok, err) => {
-        const chunks = []
-        req.on('data', c => chunks.push(c))
-        req.on('end', () => ok(Buffer.concat(chunks).toString()))
-        req.on('error', err)
-      }))
+      const body = JSON.parse(await readBody(req))
       const { pid, cols, rows } = body
       if (!pid || !cols || !rows || cols < 20 || rows < 5 || cols > 500 || rows > 600) throw new Error('bad dims')
-      // find the deepest descendant tty (script's inner pty)
-      let pids = [Number(pid)], tty = null
-      for (let d = 0; d < 4 && pids.length; d++) {
-        const kids = (await Promise.all(pids.map(p => run('pgrep', ['-P', String(p)]).catch(() => ({ stdout: '' })))))
-          .flatMap(r => r.stdout.split('\n').filter(Boolean))
-        for (const k of kids) {
-          const t = (await run('ps', ['-o', 'tty=', '-p', k])).stdout.trim()
-          if (t && t !== '??') tty = t
-        }
-        pids = kids
-      }
-      if (!tty) throw new Error('no tty')
-      // if the pty is already at the target size, setting it again emits no
-      // SIGWINCH and the app never repaints — jiggle one column to force it
-      const cur = (await run('stty', ['-f', '/dev/' + tty, 'size'])).stdout.trim().split(/\s+/).map(Number)
-      if (cur[0] === rows && cur[1] === cols) {
-        await run('stty', ['-f', '/dev/' + tty, 'rows', String(rows), 'columns', String(cols + 1)])
-        await new Promise(r => setTimeout(r, 50))
-      }
-      await run('stty', ['-f', '/dev/' + tty, 'rows', String(rows), 'columns', String(cols)])
+      const r2 = await resizeInner(Number(pid), cols, rows)
+      // track resized ptys so a vanished phone (no clean close) still gets
+      // its desktop size back — unless this resize IS the restore
+      const outer = await outerSize(Number(pid)).catch(() => null)
+      if (outer && outer.rows === rows && outer.cols === cols) resizedPids.delete(Number(pid))
+      else resizedPids.set(Number(pid), Date.now())
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, data: { tty, rows, cols } }))
+      res.end(JSON.stringify({ ok: true, data: { tty: r2.tty, rows, cols } }))
     } catch (e) {
       res.writeHead(400, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: false, error: String(e.message || e) }))

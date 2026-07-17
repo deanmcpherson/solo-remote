@@ -62,7 +62,10 @@
   }
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  pre, input, textarea, .xterm, .xterm * { -webkit-user-select: text; user-select: text; }
+  pre, input, textarea, .xterm, .xterm *, .mdview, .mdview *, .codeview, .codeview *,
+  #hist, #hist *, #copyview pre, #copyview pre * {
+    -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
+  }
   html, body { height: 100%; }
   body {
     background: var(--bg);
@@ -340,9 +343,9 @@
   .fchip.link { text-decoration: none; border-style: dashed; }
 
   /* read-only file viewer */
-  #fileview { display: none; position: fixed; inset: 0; z-index: 35; background: var(--bg); padding-top: env(safe-area-inset-top); flex-direction: column; }
-  #fileview.open { display: flex; }
-  #fileview .fbody { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
+  #fileview, #copyview { display: none; position: fixed; inset: 0; z-index: 35; background: var(--bg); padding-top: env(safe-area-inset-top); flex-direction: column; }
+  #fileview.open, #copyview.open { display: flex; }
+  #fileview .fbody, #copyview .fbody { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
   .codeview { font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
   .mdview { font-family: -apple-system, system-ui, sans-serif; font-size: 15px; line-height: 1.6; max-width: 680px; margin: 0 auto; }
   .mdview h1, .mdview h2, .mdview h3, .mdview h4 { margin: 1.2em 0 .5em; line-height: 1.25; }
@@ -411,6 +414,7 @@
 <div id="sheet" onclick="closeSheet()"></div>
 <div id="lock"></div>
 <div id="fileview"></div>
+<div id="copyview"></div>
 
 <script>
 const $ = id => document.getElementById(id)
@@ -425,6 +429,7 @@ const ICONS = {
   theme: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>',
   doc: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   link: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+  copy: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
 }
 
 const state = {
@@ -638,7 +643,7 @@ async function lockPasskey() {
 
 /* ---------- settings screen ---------- */
 
-const APP_VERSION = 'v0717-1952'
+const APP_VERSION = 'v0718-0947'
 
 async function openSettings() {
   let info = { passkeys: 0, pushSubs: 0 }
@@ -1108,6 +1113,40 @@ async function openXterm(id, name, pid, tee) {
   term.focus()
 }
 
+/* ---------- copy mode: selectable snapshot of the terminal ---------- */
+
+function openCopy() {
+  let text = ''
+  if (state.xterm) {
+    const b = state.xterm.buffer.active
+    const lines = []
+    for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '')
+    while (lines.length && !lines[lines.length - 1]) lines.pop()
+    text = lines.join('\n')
+  } else {
+    const pre = $('term-out')
+    text = pre?.dataset.raw || pre?.textContent || ''
+  }
+  const cv = $('copyview')
+  cv.innerHTML = `
+    <div class="term-head">
+      <button class="act small" onclick="closeCopy()">‹ back</button>
+      <span class="term-name">select to copy</span>
+      <button class="act small" id="copyall">copy all</button>
+    </div>
+    <div class="fbody"><pre class="codeview" id="copy-text"></pre></div>`
+  cv.querySelector('#copy-text').textContent = text || '(empty)'
+  cv.querySelector('#copyall').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      cv.querySelector('#copyall').textContent = 'copied ✓'
+    } catch { alert('clipboard blocked — select manually') }
+  }
+  cv.classList.add('open')
+  cv.querySelector('.fbody').scrollTop = cv.querySelector('.fbody').scrollHeight
+}
+function closeCopy() { const cv = $('copyview'); cv.classList.remove('open'); cv.innerHTML = '' }
+
 /* ---------- referenced-file chips + read-only viewer ---------- */
 
 async function loadFileChips(pid) {
@@ -1212,6 +1251,7 @@ function closeTerm() {
   clearInterval(state.teeProbe)
   clearInterval(state.chipsTimer)
   closeFile()
+  closeCopy()
   clearInterval(state.driftTimer)
   if (state.termWs) { try { state.termWs.close() } catch {}; state.termWs = null }
   api('/viewing', { json: { procId: null } }).catch(() => {})
@@ -1244,6 +1284,7 @@ function termbarHTML(id) {
         <button onclick="sendBytes(${id},[27,91,65])">↑</button>
         <button onclick="sendBytes(${id},[27,91,66])">↓</button>
         <button class="mode ${live ? 'on' : ''}" onclick="toggleKbMode(${id})" title="live keystroke mode">live</button>
+        <button onclick="openCopy()" title="copy text">${ICONS.copy}</button>
       </div>
       ${live
         ? `<input type="text" id="term-in" class="ghost" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="terminal keyboard input">`
