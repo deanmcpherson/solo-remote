@@ -146,6 +146,17 @@ async function sendPushAll(payload) {
 }
 
 const watch = { procStatus: {}, agentIdle: {}, primed: false }
+// default tool names (Claude, Gemini, ...): only these get replaced by AI
+// session titles — anything else is a manual rename and wins as-is
+const defaultToolNames = new Set(['Terminal', 'Shell'])
+async function refreshToolNames() {
+  try {
+    const r = await mcpCall('list_agent_tools', {})
+    for (const t of JSON.parse(r.content?.[0]?.text || '[]')) defaultToolNames.add(t.name)
+  } catch {}
+}
+setTimeout(refreshToolNames, 3000)
+setInterval(refreshToolNames, 10 * 60 * 1000)
 const pendingNotifs = new Set()   // tags sent but not yet seen/cleared
 const notifLog = []               // recent notifications, newest last
 let notifSeq = 0
@@ -188,7 +199,10 @@ async function watchTick() {
         const since = (watch.idleSince || {})[a.id]
         if (watch.primed && idle === true && since && Date.now() - since > 12000) {
           delete watch.idleSince[a.id]
-          const title = (a.pid && (await claudeInfo(a.pid).catch(() => ({}))).title) || a.name
+          let title = a.name
+          if (defaultToolNames.has(a.name) && a.pid) {
+            title = (await claudeInfo(a.pid).catch(() => ({}))).title || a.name
+          }
           notifyOnce('idle-' + a.id, { title: `${title} is waiting`, body: `${a.name} · ${a.projectName}`, procId: a.id })
         }
         watch.agentIdle[a.id] = idle

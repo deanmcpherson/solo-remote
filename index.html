@@ -643,7 +643,7 @@ async function lockPasskey() {
 
 /* ---------- settings screen ---------- */
 
-const APP_VERSION = 'v0718-0947'
+const APP_VERSION = 'v0719-1034'
 
 async function openSettings() {
   let info = { passkeys: 0, pushSubs: 0 }
@@ -727,6 +727,10 @@ async function resumeAgent(projectId, pid) {
 
 /* ---------- home: all agents, most recently active first ---------- */
 
+function isDefaultName(name) {
+  return state.agentTools.some(t => t.name === name) || /^(Terminal|Shell)$/i.test(name)
+}
+
 async function renderHome() {
   const d = await api('/api/processes')
   const agents = d.processes.filter(x => x.kind === 'agent')
@@ -736,7 +740,7 @@ async function renderHome() {
     try { states = await api('/agent-status?ids=' + running.map(a => a.id).join(',')) } catch {}
     try {
       const titles = await api('/agent-titles?procs=' + running.map(x => `${x.id}:${x.pid}`).join(','))
-      for (const a of agents) if (titles[a.id]) a.displayTitle = titles[a.id]
+      for (const a of agents) if (titles[a.id] && isDefaultName(a.name)) a.displayTitle = titles[a.id]
     } catch {}
   }
   const recency = a => {
@@ -808,7 +812,7 @@ async function renderProcesses(kind) {
     if (running.length) {
       try {
         const titles = await api('/agent-titles?procs=' + running.map(x => `${x.id}:${x.pid}`).join(','))
-        for (const x of procs) if (titles[x.id]) x.displayTitle = titles[x.id]
+        for (const x of procs) if (titles[x.id] && isDefaultName(x.name)) x.displayTitle = titles[x.id]
       } catch {}
       try {
         const st = await api('/agent-status?ids=' + running.map(x => x.id).join(','))
