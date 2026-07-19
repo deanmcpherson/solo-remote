@@ -643,7 +643,7 @@ async function lockPasskey() {
 
 /* ---------- settings screen ---------- */
 
-const APP_VERSION = 'v0719-1034'
+const APP_VERSION = 'v0719-1048'
 
 async function openSettings() {
   let info = { passkeys: 0, pushSubs: 0 }
@@ -684,6 +684,7 @@ function closeSheet() { $('sheet').classList.remove('open'); $('sheet').innerHTM
 
 function procMenu(id, name, kind, status, projectId, pid) {
   const items = []
+  items.push({ label: 'rename…', fn: `() => renameProc(${id}, '${esc(name)}')` })
   if (kind === 'agent') items.push({ label: 'resume conversation (new session)', fn: `() => resumeAgent(${projectId}, ${pid || 0})` })
   if (status === 'running') {
     items.push({ label: 'restart', fn: `() => api('/api/processes/${id}/restart',{method:'POST'}).then(refresh)` })
@@ -705,6 +706,14 @@ async function resumePicker() {
     const p = d.process
     setTimeout(() => openTerm(p.id, p.name, true, p.pid || 0), 1800)
   } catch (e) { alert('resume failed: ' + e.message) }
+}
+
+async function renameProc(id, current) {
+  const name = prompt('New name:', current)
+  if (!name || name === current) return
+  try { await api(`/api/processes/${id}/rename`, { json: { name } }) }
+  catch (e) { alert('rename failed: ' + e.message) }
+  refresh()
 }
 
 async function resumeAgent(projectId, pid) {
