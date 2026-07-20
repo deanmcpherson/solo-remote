@@ -808,6 +808,36 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  if (url.pathname === '/ls') {
+    // project file explorer: list a directory, contained to the project root
+    try {
+      const projectId = Number(url.searchParams.get('projectId'))
+      const rel = url.searchParams.get('dir') || ''
+      const { base, token } = solo()
+      const pr = await fetch(`${base}/api/projects/${projectId}`, { headers: { authorization: `Bearer ${token}` } })
+      const proj = (await pr.json()).data?.project
+      if (!proj?.path) throw new Error('project not found')
+      const root = realpathSync(proj.path)
+      const full = rel ? realpathSync(path.join(root, rel)) : root
+      if (full !== root && !full.startsWith(root + '/')) throw new Error('outside project')
+      const entries = readdirSync(full, { withFileTypes: true })
+        .filter(e => e.name !== '.git' && e.name !== 'node_modules')
+        .map(e => {
+          let size = 0
+          try { if (e.isFile()) size = statSync(path.join(full, e.name)).size } catch {}
+          return { name: e.name, dir: e.isDirectory(), size }
+        })
+        .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name))
+        .slice(0, 500)
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, data: { entries, dir: rel } }))
+    } catch (e) {
+      res.writeHead(404, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: String(e.message || e) }))
+    }
+    return
+  }
+
   if (url.pathname === '/agent-files') {
     // recently referenced file paths from the conversation, for quick-open chips
     try {
@@ -866,10 +896,18 @@ const server = http.createServer(async (req, res) => {
     // read-only file fetch, strictly contained within the agent's cwd
     try {
       const pid = Number(url.searchParams.get('pid'))
+      const projectId = Number(url.searchParams.get('projectId'))
       const rel = url.searchParams.get('path') || ''
-      const info = await claudeInfo(pid)
-      if (!info.cwd) throw new Error('no cwd')
-      const root = realpathSync(info.cwd)
+      let rootDir
+      if (projectId) {
+        const { base, token } = solo()
+        const pr = await fetch(`${base}/api/projects/${projectId}`, { headers: { authorization: `Bearer ${token}` } })
+        rootDir = (await pr.json()).data?.project?.path
+      } else {
+        rootDir = (await claudeInfo(pid)).cwd
+      }
+      if (!rootDir) throw new Error('no root')
+      const root = realpathSync(rootDir)
       const full = realpathSync(path.join(root, rel))
       if (full !== root && !full.startsWith(root + '/')) throw new Error('outside project')
       const st = statSync(full)

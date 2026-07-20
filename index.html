@@ -327,6 +327,15 @@
   #lock button.alt { color: var(--fg); background: var(--bg); }
   #lock .err { margin-top: 10px; font-size: 12px; color: var(--err); min-height: 1em; }
 
+  /* file explorer breadcrumbs */
+  .crumbs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; padding: 0 4px 10px; }
+  .crumbs button {
+    font: inherit; font-size: 12px; font-weight: 700; color: var(--fg);
+    background: none; border: none; padding: 4px 6px; cursor: pointer;
+  }
+  .crumbs button:active { background: var(--fg); color: var(--bg); border-radius: var(--radius); }
+  .crumbs .sep { color: var(--faint); }
+
   /* referenced-file chips */
   #filechips { display: flex; gap: 6px; overflow-x: auto; padding: 6px 10px 0; scrollbar-width: none; flex: none; }
   #filechips::-webkit-scrollbar { display: none; }
@@ -430,6 +439,7 @@ const ICONS = {
   doc: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   link: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   copy: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  folder: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
 }
 
 const state = {
@@ -439,6 +449,7 @@ const state = {
 }
 const TABS = [
   { key: 'todos', label: 'Todos' },
+  { key: 'files', label: 'Files' },
   { key: 'agents', label: 'Agents' },
   { key: 'terminals', label: 'Terms' },
   { key: 'commands', label: 'Cmds' },
@@ -571,7 +582,7 @@ function renderTabs() {
     `<button class="${t.key === state.tab ? 'on' : ''}" onclick="pickTab('${t.key}')">${t.label}</button>`
   ).join('')
 }
-function pickProject(id) { state.view = 'project'; state.projectId = id; state.editingPad = null; renderProjbar(); refresh() }
+function pickProject(id) { state.view = 'project'; state.projectId = id; state.editingPad = null; state.fileDir = ''; renderProjbar(); refresh() }
 function pickTab(key) { state.tab = key; state.editingPad = null; renderTabs(); refresh() }
 
 async function newProject() {
@@ -643,7 +654,7 @@ async function lockPasskey() {
 
 /* ---------- settings screen ---------- */
 
-const APP_VERSION = 'v0719-1048'
+const APP_VERSION = 'v0720-1223'
 
 async function openSettings() {
   let info = { passkeys: 0, pushSubs: 0 }
@@ -1182,7 +1193,8 @@ async function loadFileChips(pid) {
   } catch {}
 }
 
-async function openFile(pid, rel) {
+async function openFile(src, rel) {
+  if (typeof src === 'number') src = 'pid=' + src
   const fv = $('fileview')
   fv.innerHTML = `
     <div class="term-head">
@@ -1192,7 +1204,7 @@ async function openFile(pid, rel) {
     <div class="fbody"><div class="empty">loading…</div></div>`
   fv.classList.add('open')
   try {
-    const d = await api('/file?pid=' + pid + '&path=' + encodeURIComponent(rel))
+    const d = await api('/file?' + src + '&path=' + encodeURIComponent(rel))
     const body = fv.querySelector('.fbody')
     const ext = (rel.split('.').pop() || '').toLowerCase()
     if (ext === 'md') {
@@ -1414,6 +1426,33 @@ async function pollOutput(id) {
   pollOutput._busy = false
 }
 
+/* ---------- project file explorer ---------- */
+
+function fmtSize(n) {
+  return n < 1024 ? n + 'B' : n < 1048576 ? Math.round(n / 1024) + 'KB' : (n / 1048576).toFixed(1) + 'MB'
+}
+
+async function renderFiles() {
+  const dir = state.fileDir || ''
+  let d
+  try { d = await api(`/ls?projectId=${state.projectId}&dir=${encodeURIComponent(dir)}`) }
+  catch (e) { $('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return }
+  const crumbs = dir ? dir.split('/') : []
+  const crumbHtml = `<div class="crumbs">
+    <button onclick="state.fileDir='';refresh()">/</button>
+    ${crumbs.map((c, i) => `<button onclick="state.fileDir='${esc(crumbs.slice(0, i + 1).join('/'))}';refresh()">${esc(c)}</button>`).join('<span class="sep">/</span>')}
+  </div>`
+  $('main').innerHTML = crumbHtml + (d.entries.length ? d.entries.map(e => {
+    const rel = dir ? dir + '/' + e.name : e.name
+    return e.dir
+      ? `<div class="card"><div class="card-row" onclick="state.fileDir='${esc(rel)}';refresh()">
+          ${ICONS.folder}<span class="p-meta"><div class="p-name">${esc(e.name)}</div></span></div></div>`
+      : `<div class="card"><div class="card-row" onclick="openFile('projectId=' + state.projectId, '${esc(rel)}')">
+          ${ICONS.doc}<span class="p-meta"><div class="p-name" style="font-weight:400">${esc(e.name)}</div></span>
+          <span class="p-right">${fmtSize(e.size)}</span></div></div>`
+  }).join('') : '<div class="empty">empty directory</div>')
+}
+
 /* ---------- todos ---------- */
 
 async function renderTodos() {
@@ -1527,7 +1566,8 @@ async function refresh() {
     renderTabs()
     if (state.view === 'home') { await renderHome(); online(true); return }
     if (state.projectId == null) { $('main').innerHTML = '<div class="empty">no projects — create one above</div>'; online(true); return }
-    if (state.tab === 'todos') await renderTodos()
+    if (state.tab === 'files') await renderFiles()
+    else if (state.tab === 'todos') await renderTodos()
     else if (state.tab === 'agents') await renderProcesses('agent')
     else if (state.tab === 'terminals') await renderProcesses('terminal')
     else if (state.tab === 'commands') await renderProcesses('command')
